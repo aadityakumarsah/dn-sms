@@ -42,8 +42,8 @@ export const api = {
       request<any>("/api/auth/super-admin/create-school", { method: "POST", body: JSON.stringify(data) }),
 
     // School User Auth
-    loginSchool: (email: string, password: string, schoolSlug: string) =>
-      request<{ token: string; user: any }>("/api/auth/school/login", { method: "POST", body: JSON.stringify({ email, password, schoolSlug }) }),
+    loginSchool: (email: string, password: string) =>
+      request<{ token: string; user: any }>("/api/auth/school/login", { method: "POST", body: JSON.stringify({ email, password }) }),
     meSchool: () => request<any>("/api/auth/school/me"),
 
     // Password Management
@@ -113,6 +113,8 @@ export const api = {
     announcements: () => request<any[]>("/api/super-admin/announcements"),
     createAnnouncement: (data: Record<string, unknown>) => request<any>("/api/super-admin/announcements", { method: "POST", body: JSON.stringify(data) }),
     deleteAnnouncement: (id: string) => request<any>(`/api/super-admin/announcements/${id}`, { method: "DELETE" }),
+    resetAdminPassword: (schoolId: string) => request<any>(`/api/super-admin/schools/${schoolId}/reset-admin-password`, { method: "POST" }),
+    updateAdminCredentials: (schoolId: string, data: { email?: string; password?: string }) => request<any>(`/api/super-admin/schools/${schoolId}/admin`, { method: "PATCH", body: JSON.stringify(data) }),
     activity: (p?: { page?: number; action?: string }) => {
       const q = new URLSearchParams();
       if (p?.page) q.set("page", String(p.page));
@@ -141,6 +143,7 @@ export const api = {
     createStudent: (data: Record<string, unknown>) => request<any>("/api/admin/students", { method: "POST", body: JSON.stringify(data) }),
     studentDetail: (id: string) => request<any>(`/api/admin/students/${id}`),
     updateStudent: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/students/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    updateStudentCredentials: (id: string, data: { email?: string; password?: string }) => request<any>(`/api/admin/students/${id}/credentials`, { method: "PATCH", body: JSON.stringify(data) }),
     allocateStudent: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/students/${id}/allocate`, { method: "POST", body: JSON.stringify(data) }),
     deleteStudent: (id: string) => request<any>(`/api/admin/students/${id}`, { method: "DELETE" }),
 
@@ -154,6 +157,7 @@ export const api = {
     createTeacher: (data: Record<string, unknown>) => request<any>("/api/admin/teachers", { method: "POST", body: JSON.stringify(data) }),
     teacherDetail: (id: string) => request<any>(`/api/admin/teachers/${id}`),
     updateTeacher: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/teachers/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    updateTeacherCredentials: (id: string, data: { email?: string; password?: string }) => request<any>(`/api/admin/teachers/${id}/credentials`, { method: "PATCH", body: JSON.stringify(data) }),
     deleteTeacher: (id: string) => request<any>(`/api/admin/teachers/${id}`, { method: "DELETE" }),
 
     // Staff (non-teaching)
@@ -313,5 +317,8 @@ export const api = {
   parent: {
     dashboard: () => request<any>("/api/parent/dashboard"),
     notices: () => request<any[]>("/api/parent/notices"),
+    results: () => request<any[]>("/api/parent/results"),
+    fees: () => request<any[]>("/api/parent/fees"),
+    attendance: () => request<any[]>("/api/parent/attendance"),
   },
 };

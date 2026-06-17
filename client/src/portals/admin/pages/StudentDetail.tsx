@@ -1,8 +1,115 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Mail, Phone, MapPin, Calendar, Bus, Footprints, CheckCircle2, XCircle, Clock, GraduationCap, Wallet } from "lucide-react";
+import { ArrowLeft, Mail, Phone, MapPin, Calendar, Bus, Footprints, CheckCircle2, XCircle, Clock, GraduationCap, Wallet, Key, Eye, EyeOff, Copy, CheckCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+
+function CredentialCard({ studentId, userId, email: initialEmail }: { studentId: string; userId: string; email: string }) {
+  const [editing, setEditing] = useState(false);
+  const [email, setEmail] = useState(initialEmail);
+  const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [copiedEmail, setCopiedEmail] = useState(false);
+
+  const copy = (val: string, setCopied: (v: boolean) => void) => {
+    navigator.clipboard.writeText(val).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+
+  const handleSave = async () => {
+    setSaving(true); setError(""); setSuccess("");
+    try {
+      await api.admin.updateStudentCredentials(studentId, {
+        email: email !== initialEmail ? email : undefined,
+        password: password || undefined,
+      });
+      setSuccess("Credentials updated successfully.");
+      setEditing(false);
+      setPassword("");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAutoReset = async () => {
+    if (!confirm("Auto-generate a new password for this student?")) return;
+    setSaving(true); setError(""); setSuccess("");
+    try {
+      const r = await api.auth.resetPassword(userId);
+      if (r?.credentials) {
+        setSuccess(`New password: ${r.credentials.password}`);
+        setEditing(false);
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><Key className="w-4 h-4 text-gray-300" /> Login Credentials</h2>
+        {!editing && (
+          <button onClick={() => { setEditing(true); setError(""); setSuccess(""); }} className="text-xs text-blue-600 hover:underline">Edit</button>
+        )}
+      </div>
+
+      {!editing ? (
+        <div className="space-y-2">
+          {success && <div className="p-2.5 bg-emerald-50 border border-emerald-100 rounded-xl text-xs text-emerald-700 font-mono break-all">{success}</div>}
+          <div className="bg-gray-50 rounded-xl px-3 py-2.5 flex items-center justify-between gap-2">
+            <div>
+              <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wide mb-0.5">Login Email</p>
+              <code className="text-sm text-gray-800">{email}</code>
+            </div>
+            <button onClick={() => copy(email, setCopiedEmail)} className="shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-white border border-transparent hover:border-gray-200">
+              {copiedEmail ? <CheckCheck className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+          <div className="bg-gray-50 rounded-xl px-3 py-2.5">
+            <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wide mb-0.5">Password</p>
+            <code className="text-sm text-gray-400">••••••••</code>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {error && <div className="p-2.5 bg-rose-50 text-rose-600 text-xs rounded-xl">{error}</div>}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Email</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">New Password <span className="text-gray-300">(blank = keep current)</span></label>
+            <div className="relative">
+              <input type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter new password"
+                className="w-full px-3 py-2 pr-9 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
+              <button type="button" onClick={() => setShowPw(v => !v)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400">
+                {showPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleAutoReset} disabled={saving} className="flex-1 py-2 text-xs border border-gray-200 rounded-xl text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+              Auto-reset
+            </button>
+            <button onClick={() => { setEditing(false); setEmail(initialEmail); setPassword(""); setError(""); }} className="px-3 py-2 text-xs text-gray-400">Cancel</button>
+            <button onClick={handleSave} disabled={saving} className="flex-1 py-2 text-xs bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium">
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const FEE_BADGE: Record<string, string> = {
   PAID: "bg-emerald-50 text-emerald-700", PARTIAL: "bg-blue-50 text-blue-700",
@@ -120,6 +227,10 @@ export default function StudentDetail() {
             ))}
           </div>
         </div>
+
+        {s.userId && s.email && (
+          <CredentialCard studentId={s.id} userId={s.userId} email={s.email} />
+        )}
       </div>
     </div>
   );

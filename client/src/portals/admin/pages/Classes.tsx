@@ -18,8 +18,8 @@ const CATEGORIES: Cat[] = [
   { key: "PRIMARY", label: "Primary (1–8)", presets: Array.from({ length: 8 }, (_, i) => ({ name: `Class ${i + 1}`, level: i + 1 })) },
   { key: "SECONDARY", label: "Secondary (9–10)", presets: [{ name: "Class 9", level: 9 }, { name: "Class 10", level: 10 }] },
   { key: "HIGH_SCHOOL", label: "High School / +2 (11–12)", presets: [{ name: "Class 11", level: 11 }, { name: "Class 12", level: 12 }], streams: ["Science", "Management", "Humanities", "Education"], defaultDuration: 2 },
-  { key: "BACHELOR", label: "Bachelor", presets: [{ name: "BSc CSIT", level: 13 }, { name: "BCA", level: 13 }, { name: "BBA", level: 13 }, { name: "BBS", level: 13 }, { name: "BE Computer", level: 13 }, { name: "B.Tech", level: 13 }, { name: "BA", level: 13 }, { name: "BSc", level: 13 }], streams: ["Science", "Management", "Humanities", "Computer Science", "Engineering"], defaultDuration: 4 },
-  { key: "MASTER", label: "Master", presets: [{ name: "MSc", level: 17 }, { name: "MBA", level: 17 }, { name: "MA", level: 17 }, { name: "M.Tech", level: 17 }], streams: ["Science", "Management", "Humanities", "Computer Science"], defaultDuration: 2 },
+  // { key: "BACHELOR", label: "Bachelor", presets: [{ name: "BSc CSIT", level: 13 }, { name: "BCA", level: 13 }, { name: "BBA", level: 13 }, { name: "BBS", level: 13 }, { name: "BE Computer", level: 13 }, { name: "B.Tech", level: 13 }, { name: "BA", level: 13 }, { name: "BSc", level: 13 }], streams: ["Science", "Management", "Humanities", "Computer Science", "Engineering"], defaultDuration: 4 },
+  // { key: "MASTER", label: "Master", presets: [{ name: "MSc", level: 17 }, { name: "MBA", level: 17 }, { name: "MA", level: 17 }, { name: "M.Tech", level: 17 }], streams: ["Science", "Management", "Humanities", "Computer Science"], defaultDuration: 2 },
 ];
 
 function GradeModal({ open, onClose, departments, onSave }: { open: boolean; onClose: () => void; departments: any[]; onSave: (d: any) => Promise<void> }) {

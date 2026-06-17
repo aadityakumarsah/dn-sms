@@ -6,15 +6,27 @@
  */
 
 import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import App from "./App";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 
 const elem = document.getElementById("root")!;
 const app = (
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>
 );
 
-// https://bun.com/docs/bundler/hot-reloading#import-meta-hot-data
-(import.meta.hot.data.root ??= createRoot(elem)).render(app);
+// Persist the React root across HMR so state isn't wiped on every edit.
+// Guard `import.meta.hot` so a production build (where it's undefined) and any
+// reload edge case can't throw and leave a blank white page.
+const hot = (import.meta as any).hot;
+if (hot) {
+  (hot.data.root ??= createRoot(elem)).render(app);
+} else {
+  let root: Root | undefined = (window as any).__dn_root;
+  if (!root) { root = createRoot(elem); (window as any).__dn_root = root; }
+  root.render(app);
+}

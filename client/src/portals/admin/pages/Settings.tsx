@@ -44,9 +44,10 @@ export default function Settings() {
         {desc && <p className="text-xs text-gray-400 mt-0.5">{desc}</p>}
       </div>
       <button type="button" onClick={() => setForm({ ...form, [k]: !form[k] })}
-        className={cn("relative rounded-full transition-colors shrink-0", form[k] ? "bg-blue-500" : "bg-gray-200")}
-        style={{ height: "22px", width: "40px" }}>
-        <span className={cn("absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform", form[k] ? "translate-x-5" : "translate-x-0.5")} />
+        className={cn("relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors duration-200 focus:outline-none",
+          form[k] ? "bg-blue-500" : "bg-gray-200")}>
+        <span className={cn("pointer-events-none absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200",
+          form[k] ? "translate-x-5" : "translate-x-0")} />
       </button>
     </div>
   );

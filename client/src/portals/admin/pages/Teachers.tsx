@@ -1,8 +1,139 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Edit3, Trash2, X, RefreshCw, Mail, Phone } from "lucide-react";
+import { Search, Plus, Edit3, Trash2, X, RefreshCw, Mail, Phone, Copy, CheckCheck, Key } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+
+function CredField({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => { navigator.clipboard.writeText(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
+  return (
+    <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-200">
+      <p className="text-xs font-medium text-gray-500 mb-1">{label}</p>
+      <div className="flex items-center justify-between gap-2">
+        <code className="text-sm font-mono text-gray-900 break-all select-all">{value}</code>
+        <button onClick={copy} className="shrink-0 p-1.5 rounded-lg hover:bg-white border border-transparent hover:border-gray-200 text-gray-400 hover:text-gray-700">
+          {copied ? <CheckCheck className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CredentialsModal({ open, onClose, creds }: { open: boolean; onClose: () => void; creds: any | null }) {
+  if (!open || !creds) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+        <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-6 py-5 text-white">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center"><Key className="w-5 h-5" /></div>
+            <div>
+              <h2 className="font-bold text-base">Teacher Account Created!</h2>
+              <p className="text-teal-100 text-xs mt-0.5">Share these login credentials with the teacher</p>
+            </div>
+          </div>
+        </div>
+        <div className="p-6 space-y-3">
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700 font-medium">
+            ⚠ The teacher should change their password after first login via Settings.
+          </div>
+          <CredField label="Email" value={creds.email ?? ""} />
+          <CredField label="Password" value={creds.password ?? ""} />
+        </div>
+        <div className="px-6 pb-6">
+          <button onClick={onClose} className="w-full bg-teal-600 text-white font-semibold py-2.5 rounded-xl hover:bg-teal-700 transition-colors text-sm">
+            Done — I've saved the credentials
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TeacherCredEditModal({ open, onClose, teacher, onSaved }: {
+  open: boolean; onClose: () => void; teacher: any | null; onSaved: (creds: any) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (teacher) { setEmail(teacher.email ?? ""); setPassword(""); setError(""); }
+  }, [teacher, open]);
+
+  if (!open || !teacher) return null;
+
+  const handleSave = async () => {
+    if (!email.trim()) { setError("Email is required"); return; }
+    setSaving(true); setError("");
+    try {
+      const r = await api.admin.updateTeacherCredentials(teacher.id, {
+        email: email !== teacher.email ? email : undefined,
+        password: password || undefined,
+      });
+      onSaved(r.credentials);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAutoReset = async () => {
+    if (!confirm(`Auto-generate new credentials for ${teacher.name}?`)) return;
+    setSaving(true); setError("");
+    try {
+      const r = await api.auth.resetPassword(teacher.userId);
+      if (r?.credentials) onSaved(r.credentials);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h2 className="font-bold text-gray-900 text-sm">Edit Login Credentials</h2>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <p className="text-xs text-gray-500">Editing credentials for <span className="font-medium text-gray-700">{teacher.name}</span></p>
+          {error && <div className="p-3 bg-rose-50 text-rose-600 text-xs rounded-xl">{error}</div>}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">Email</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+              New Password <span className="text-gray-400 font-normal">(leave blank to keep current)</span>
+            </label>
+            <input type="text" value={password} onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter custom password"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+        </div>
+        <div className="px-5 pb-5 flex gap-2">
+          <button onClick={handleAutoReset} disabled={saving}
+            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-xl text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+            Auto-reset
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            className="flex-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium">
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const STATUS_BADGE: Record<string, string> = {
   ACTIVE: "bg-emerald-50 text-emerald-700",
@@ -11,17 +142,31 @@ const STATUS_BADGE: Record<string, string> = {
 };
 const dummyAvatar = (name: string) => `https://ui-avatars.com/api/?name=${encodeURIComponent(name || "Teacher")}&background=random&size=128`;
 
+// Extracted outside TeacherModal so React doesn't remount inputs on every re-render (fixes focus loss bug)
+function FormField({ label, k, type = "text", placeholder = "", form, setForm }: {
+  label: string; k: string; type?: string; placeholder?: string;
+  form: any; setForm: (f: any) => void;
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1.5">{label}</label>
+      <input type={type} value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: e.target.value })} placeholder={placeholder}
+        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
+    </div>
+  );
+}
+
 function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClose: () => void; initial?: any; onSave: (d: any) => Promise<void> }) {
-  const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "" });
+  const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "", password: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (initial) {
       const parts = (initial.name ?? "").split(" ");
-      setForm({ firstName: parts[0] ?? "", lastName: parts.slice(1).join(" "), email: initial.email ?? "", phone: initial.phone ?? "", gender: initial.gender ?? "MALE", qualification: initial.qualification ?? "", specialization: initial.specialization ?? "", experience: String(initial.experience ?? ""), joinDate: initial.joinDate ? initial.joinDate.slice(0, 10) : "", employeeId: initial.employeeId ?? "", avatar: initial.avatar ?? "" });
+      setForm({ firstName: parts[0] ?? "", lastName: parts.slice(1).join(" "), email: initial.email ?? "", phone: initial.phone ?? "", gender: initial.gender ?? "MALE", qualification: initial.qualification ?? "", specialization: initial.specialization ?? "", experience: String(initial.experience ?? ""), joinDate: initial.joinDate ? initial.joinDate.slice(0, 10) : "", employeeId: initial.employeeId ?? "", avatar: initial.avatar ?? "", password: "" });
     } else {
-      setForm({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "" });
+      setForm({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "", password: "" });
     }
     setError("");
   }, [initial, open]);
@@ -35,14 +180,6 @@ function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClo
     catch (e: any) { setError(e.message); }
     finally { setSaving(false); }
   };
-
-  const F = ({ label, k, type = "text", placeholder = "" }: { label: string; k: string; type?: string; placeholder?: string }) => (
-    <div>
-      <label className="block text-xs font-medium text-gray-600 mb-1.5">{label}</label>
-      <input type={type} value={(form as any)[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} placeholder={placeholder}
-        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
-    </div>
-  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -62,12 +199,12 @@ function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClo
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <F label="First Name *" k="firstName" />
-            <F label="Last Name *" k="lastName" />
+            <FormField label="First Name *" k="firstName" form={form} setForm={setForm} />
+            <FormField label="Last Name *" k="lastName" form={form} setForm={setForm} />
           </div>
-          <F label="Email *" k="email" type="email" placeholder="teacher@school.edu.np" />
+          <FormField label="Email *" k="email" type="email" placeholder="teacher@school.edu.np" form={form} setForm={setForm} />
           <div className="grid grid-cols-2 gap-4">
-            <F label="Phone" k="phone" placeholder="98XXXXXXXX" />
+            <FormField label="Phone" k="phone" placeholder="98XXXXXXXX" form={form} setForm={setForm} />
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">Gender</label>
               <select value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}
@@ -76,15 +213,25 @@ function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClo
               </select>
             </div>
           </div>
+          {!initial && (
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Password <span className="text-gray-400 font-normal">(auto-generated if blank)</span>
+              </label>
+              <input type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
+                placeholder={`e.g. ${form.firstName ? form.firstName.toLowerCase() + "2082@1234" : "auto-generated"}`}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
-            <F label="Qualification" k="qualification" placeholder="M.Sc. Mathematics" />
-            <F label="Specialization" k="specialization" placeholder="Mathematics" />
+            <FormField label="Qualification" k="qualification" placeholder="M.Sc. Mathematics" form={form} setForm={setForm} />
+            <FormField label="Specialization" k="specialization" placeholder="Mathematics" form={form} setForm={setForm} />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <F label="Experience (years)" k="experience" type="number" placeholder="0" />
-            <F label="Employee ID" k="employeeId" placeholder="EMP-001" />
+            <FormField label="Experience (years)" k="experience" type="number" placeholder="0" form={form} setForm={setForm} />
+            <FormField label="Employee ID" k="employeeId" placeholder="EMP-001" form={form} setForm={setForm} />
           </div>
-          <F label="Join Date" k="joinDate" type="date" />
+          <FormField label="Join Date" k="joinDate" type="date" form={form} setForm={setForm} />
         </div>
         <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl sticky bottom-0">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500">Cancel</button>
@@ -107,6 +254,8 @@ export default function Teachers() {
   const [modal, setModal] = useState(false);
   const [editTeacher, setEditTeacher] = useState<any>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [createdCreds, setCreatedCreds] = useState<any>(null);
+  const [editCredsTeacher, setEditCredsTeacher] = useState<any>(null);
 
   useEffect(() => { const t = setTimeout(() => setDebouncedSearch(search), 350); return () => clearTimeout(t); }, [search]);
   useEffect(() => {
@@ -162,8 +311,9 @@ export default function Teachers() {
                   </div>
                 </div>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => { setEditTeacher(t); setModal(true); }} className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg"><Edit3 className="w-3.5 h-3.5" /></button>
-                  <button onClick={() => setDeleteId(t.id)} className="p-1.5 text-gray-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
+                  <button title="Edit" onClick={() => { setEditTeacher(t); setModal(true); }} className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg"><Edit3 className="w-3.5 h-3.5" /></button>
+                  <button title="Edit Login Credentials" onClick={() => setEditCredsTeacher(t)} className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg"><Key className="w-3.5 h-3.5" /></button>
+                  <button title="Delete" onClick={() => setDeleteId(t.id)} className="p-1.5 text-gray-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
               </div>
               <div className="space-y-2 mb-3">
@@ -204,10 +354,23 @@ export default function Teachers() {
 
       <TeacherModal open={modal} onClose={() => { setModal(false); setEditTeacher(null); }} initial={editTeacher}
         onSave={async (d) => {
-          if (editTeacher) await api.admin.updateTeacher(editTeacher.id, d);
-          else await api.admin.createTeacher(d);
+          if (editTeacher) {
+            await api.admin.updateTeacher(editTeacher.id, d);
+          } else {
+            const result = await api.admin.createTeacher(d);
+            if (result?.credentials) setCreatedCreds(result.credentials);
+          }
           reload();
         }} />
+
+      <CredentialsModal open={!!createdCreds} onClose={() => setCreatedCreds(null)} creds={createdCreds} />
+
+      <TeacherCredEditModal
+        open={!!editCredsTeacher}
+        onClose={() => setEditCredsTeacher(null)}
+        teacher={editCredsTeacher}
+        onSaved={(creds) => { setEditCredsTeacher(null); setCreatedCreds(creds); }}
+      />
     </>
   );
 }

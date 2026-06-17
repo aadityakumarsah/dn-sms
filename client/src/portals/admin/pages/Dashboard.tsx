@@ -130,20 +130,6 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {data?.recentActivity?.length > 0 && (
-        <div className="bg-white rounded-2xl border border-gray-100">
-          <div className="px-5 py-4 border-b border-gray-100"><h2 className="font-semibold text-gray-900 text-sm">Recent Activity</h2></div>
-          <div className="divide-y divide-gray-50">
-            {data.recentActivity.map((a: any, i: number) => (
-              <div key={i} className="px-5 py-3 flex items-center gap-3">
-                <div className="w-2 h-2 rounded-full bg-purple-400 shrink-0" />
-                <p className="text-sm text-gray-700 flex-1">{a.action.replace(/\./g, " › ")}</p>
-                <p className="text-xs text-gray-400">{new Date(a.createdAt).toLocaleDateString()}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

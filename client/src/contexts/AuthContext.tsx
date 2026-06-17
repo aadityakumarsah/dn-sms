@@ -5,7 +5,8 @@ import { api } from "@/lib/api";
 interface AuthContextValue {
   user: User | null;
   isLoading: boolean;
-  login: (email: string, password: string, role: UserRole, schoolSlug?: string) => Promise<void>;
+  isInitializing: boolean;
+  login: (email: string, password: string, asSuperAdmin?: boolean) => Promise<User>;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -17,59 +18,70 @@ const USER_KEY = "dn_sms_user";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(() => {
-    const stored = localStorage.getItem(USER_KEY);
-    return stored ? JSON.parse(stored) : null;
+    try {
+      const stored = localStorage.getItem(USER_KEY);
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
   });
   const [isLoading, setIsLoading] = useState(false);
+  const hasStoredSession = !!localStorage.getItem(TOKEN_KEY);
+  const [isInitializing, setIsInitializing] = useState(hasStoredSession);
 
   useEffect(() => {
     const stored = localStorage.getItem(USER_KEY);
-    if (!stored) return;
-    const u: User = JSON.parse(stored);
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!stored || !token) { setIsInitializing(false); return; }
+    let u: User;
+    try { u = JSON.parse(stored); } catch { setIsInitializing(false); return; }
 
-    if (u.role === "super_admin") {
-      api.auth.meSuperAdmin()
-        .then((data) => {
+    const clearSession = () => {
+      setUser(null);
+      localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(TOKEN_KEY);
+    };
+
+    const verify = u.role === "super_admin"
+      ? api.auth.meSuperAdmin().then((data) => {
           const refreshed: User = { id: data.id, name: data.name, email: data.email, role: "super_admin" };
           setUser(refreshed);
           localStorage.setItem(USER_KEY, JSON.stringify(refreshed));
         })
-        .catch(() => {
-          setUser(null);
-          localStorage.removeItem(USER_KEY);
-          localStorage.removeItem(TOKEN_KEY);
-        });
-    } else {
-      api.auth.meSchool()
-        .then((data) => {
-          const refreshed: User = { id: data.id, name: data.name, email: data.email, role: data.role, schoolId: data.schoolId, schoolName: data.schoolName, schoolSlug: data.schoolSlug };
+      : api.auth.meSchool().then((data) => {
+          const refreshed: User = { id: data.id, name: data.name, email: data.email, role: data.role as UserRole, schoolId: data.schoolId, schoolName: data.schoolName };
           setUser(refreshed);
           localStorage.setItem(USER_KEY, JSON.stringify(refreshed));
-        })
-        .catch(() => {
-          setUser(null);
-          localStorage.removeItem(USER_KEY);
-          localStorage.removeItem(TOKEN_KEY);
         });
-    }
+
+    verify
+      .catch((e: any) => {
+        // Only log out on explicit 401 — network errors / server restarts should keep session alive
+        const msg: string = e?.message ?? "";
+        if (msg.includes("401") || msg.toLowerCase().includes("unauthorized")) {
+          clearSession();
+        }
+      })
+      .finally(() => setIsInitializing(false));
   }, []);
 
-  const login = useCallback(async (email: string, password: string, role: UserRole, schoolSlug?: string) => {
+  const login = useCallback(async (email: string, password: string, asSuperAdmin?: boolean): Promise<User> => {
     setIsLoading(true);
     try {
-      if (role === "super_admin") {
+      if (asSuperAdmin) {
         const res = await api.auth.loginSuperAdmin(email, password);
         localStorage.setItem(TOKEN_KEY, res.token);
         const u: User = { id: res.user.id, name: res.user.name, email: res.user.email, role: "super_admin" };
         setUser(u);
         localStorage.setItem(USER_KEY, JSON.stringify(u));
+        return u;
       } else {
-        if (!schoolSlug) throw new Error("School slug is required for school portal login");
-        const res = await api.auth.loginSchool(email, password, schoolSlug);
+        const res = await api.auth.loginSchool(email, password);
         localStorage.setItem(TOKEN_KEY, res.token);
-        const u: User = { id: res.user.id, name: res.user.name, email: res.user.email, role: res.user.role, schoolId: res.user.schoolId, schoolName: res.user.schoolName, schoolSlug: res.user.schoolSlug };
+        const u: User = { id: res.user.id, name: res.user.name, email: res.user.email, role: res.user.role as UserRole, schoolId: res.user.schoolId, schoolName: res.user.schoolName };
         setUser(u);
         localStorage.setItem(USER_KEY, JSON.stringify(u));
+        return u;
       }
     } finally {
       setIsLoading(false);
@@ -83,7 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, isLoading, isInitializing, login, logout, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
   );

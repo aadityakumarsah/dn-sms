@@ -1,112 +1,158 @@
 import { cn } from "@/lib/utils";
-import { useState } from "react";
-import { CreditCard, X } from "lucide-react";
+import { useState, useEffect } from "react";
+import { api } from "@/lib/api";
+import { CreditCard } from "lucide-react";
 
-const OUTSTANDING = [
-  { type: "Tuition Fee", amount: 4500, due: "Falgun 15, 2081", month: "Falgun 2081" },
-  { type: "Exam Fee", amount: 800, due: "Falgun 20, 2081", month: "Second Terminal" },
-  { type: "Sports Fee", amount: 500, due: "Falgun 28, 2081", month: "Annual" },
-];
-
-const HISTORY = [
-  { date: "Magh 14, 2081", type: "Tuition Fee", amount: 4500, receipt: "RCP-2081-1042", status: "Paid" },
-  { date: "Magh 14, 2081", type: "Lab Fee", amount: 1200, receipt: "RCP-2081-1041", status: "Paid" },
-  { date: "Poush 16, 2081", type: "Tuition Fee", amount: 4500, receipt: "RCP-2081-0887", status: "Paid" },
-  { date: "Mangsir 12, 2081", type: "Tuition Fee", amount: 4500, receipt: "RCP-2081-0710", status: "Paid" },
-  { date: "Mangsir 12, 2081", type: "Exam Fee", amount: 800, receipt: "RCP-2081-0709", status: "Paid" },
-];
-
-const PAYMENT_METHODS = ["eSewa", "Khalti", "Bank Transfer"];
+const statusColor: Record<string, string> = {
+  paid:     "bg-emerald-50 text-emerald-700",
+  pending:  "bg-amber-50 text-amber-700",
+  overdue:  "bg-rose-50 text-rose-700",
+  partial:  "bg-blue-50 text-blue-700",
+  waived:   "bg-gray-100 text-gray-500",
+};
 
 export default function Fees() {
-  const [payItem, setPayItem] = useState<typeof OUTSTANDING[0] | null>(null);
-  const [method, setMethod] = useState("eSewa");
+  const [children, setChildren] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeChild, setActiveChild] = useState<string>("");
+
+  useEffect(() => {
+    api.parent.fees()
+      .then((d: any) => {
+        const arr = Array.isArray(d) ? d : [];
+        setChildren(arr);
+        if (arr.length > 0) setActiveChild(arr[0].studentId);
+      })
+      .catch(() => setChildren([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const currentChild = children.find((c) => c.studentId === activeChild);
+  const fees: any[] = currentChild?.fees ?? [];
+
+  const outstanding = fees.filter((f) => ["PENDING", "OVERDUE"].includes(f.status));
+  const paid = fees.filter((f) => f.status === "PAID");
+  const totalDue = outstanding.reduce((s: number, f: any) => s + (f.amountDue - f.amountPaid), 0);
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-4">
+        <div className="h-8 bg-gray-100 rounded-xl w-48 animate-pulse" />
+        <div className="h-40 bg-gray-100 rounded-2xl animate-pulse" />
+      </div>
+    );
+  }
+
+  if (children.length === 0) {
+    return (
+      <div className="p-6">
+        <h1 className="text-xl font-bold text-gray-900 mb-1">Fees</h1>
+        <div className="bg-white rounded-2xl border border-gray-100 py-16 text-center mt-6">
+          <CreditCard className="w-10 h-10 text-gray-200 mx-auto mb-3" />
+          <p className="text-sm text-gray-400">No fee records available.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-5">
       <div>
         <h1 className="text-xl font-bold text-gray-900">Fees</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Outstanding fees and payment history for Aarav Sharma</p>
+        <p className="text-sm text-gray-500 mt-0.5">Outstanding fees and payment history</p>
       </div>
 
-      {payItem && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl border border-gray-100 w-full max-w-sm p-6 space-y-4 shadow-xl">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-gray-900">Pay {payItem.type}</h3>
-              <button onClick={() => setPayItem(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
-            </div>
-            <div className="bg-teal-50 rounded-xl px-4 py-3">
-              <p className="text-xs text-teal-700 font-medium">{payItem.month}</p>
-              <p className="text-2xl font-bold text-teal-700 mt-1">NPR {payItem.amount.toLocaleString("en-IN")}</p>
-            </div>
-            <div>
-              <p className="text-xs font-medium text-gray-600 mb-2">Select Payment Method</p>
-              <div className="space-y-2">
-                {PAYMENT_METHODS.map((m) => (
-                  <label key={m} className={cn("flex items-center gap-3 border rounded-xl px-4 py-3 cursor-pointer transition-colors", method === m ? "border-teal-500 bg-teal-50" : "border-gray-200 hover:bg-gray-50")}>
-                    <input type="radio" name="method" value={m} checked={method === m} onChange={() => setMethod(m)} className="accent-teal-600" />
-                    <span className="text-sm font-medium text-gray-800">{m}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <button className="w-full bg-teal-600 text-white rounded-xl py-2.5 text-sm font-medium hover:bg-teal-700 flex items-center justify-center gap-2">
-              <CreditCard size={15} />
-              Proceed to Pay
+      {children.length > 1 && (
+        <div className="flex gap-2">
+          {children.map((c) => (
+            <button key={c.studentId} onClick={() => setActiveChild(c.studentId)}
+              className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-colors",
+                activeChild === c.studentId ? "bg-teal-600 text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50")}>
+              {c.name}
             </button>
-          </div>
+          ))}
         </div>
       )}
 
-      <div className="space-y-3">
-        <h2 className="text-sm font-semibold text-gray-700">Outstanding Fees</h2>
-        {OUTSTANDING.map((item, i) => (
-          <div key={i} className="bg-white rounded-2xl border border-gray-100 px-5 py-4 flex items-center justify-between">
-            <div>
-              <p className="font-semibold text-gray-900">{item.type}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{item.month} · Due: {item.due}</p>
-            </div>
-            <div className="flex items-center gap-4">
-              <p className="font-bold text-gray-800">NPR {item.amount.toLocaleString("en-IN")}</p>
-              <button
-                onClick={() => setPayItem(item)}
-                className="bg-teal-600 text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-teal-700"
-              >
-                Pay Now
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-100">
-          <h2 className="text-sm font-semibold text-gray-700">Payment History</h2>
+      {currentChild && (
+        <div className="bg-teal-50 border border-teal-100 rounded-2xl px-5 py-3 text-sm text-teal-800 flex items-center justify-between">
+          <span>
+            <span className="font-semibold">{currentChild.name}</span>
+            <span className="text-teal-600 ml-2">· {currentChild.admissionNo}</span>
+          </span>
+          {totalDue > 0 && (
+            <span className="font-bold text-rose-600">NPR {totalDue.toLocaleString("en-IN")} due</span>
+          )}
         </div>
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              {["Date", "Fee Type", "Amount", "Receipt No.", "Status"].map((h) => (
-                <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {HISTORY.map((r, i) => (
-              <tr key={i} className="border-t border-gray-50 hover:bg-gray-50/60">
-                <td className="px-5 py-3.5 text-gray-600">{r.date}</td>
-                <td className="px-5 py-3.5 font-medium text-gray-900">{r.type}</td>
-                <td className="px-5 py-3.5 font-semibold text-gray-800">NPR {r.amount.toLocaleString("en-IN")}</td>
-                <td className="px-5 py-3.5 text-gray-500 font-mono text-xs">{r.receipt}</td>
-                <td className="px-5 py-3.5">
-                  <span className="text-xs px-2 py-1 rounded-lg font-medium bg-emerald-50 text-emerald-700">{r.status}</span>
-                </td>
+      )}
+
+      {outstanding.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold text-gray-700">Outstanding Fees</h2>
+          {outstanding.map((f: any) => {
+            const balance = f.amountDue - f.amountPaid;
+            const dueStr = f.dueDate ? new Date(f.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
+            return (
+              <div key={f.id} className="bg-white rounded-2xl border border-gray-100 px-5 py-4 flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-gray-900">{f.feeTypeName}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Due: {dueStr}</p>
+                  {f.amountPaid > 0 && (
+                    <p className="text-xs text-amber-600 mt-0.5">Partial: NPR {Number(f.amountPaid).toLocaleString("en-IN")} paid</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="text-right">
+                    <p className="font-bold text-gray-800">NPR {balance.toLocaleString("en-IN")}</p>
+                    <span className={cn("text-xs px-2 py-0.5 rounded-lg font-medium capitalize", statusColor[f.status?.toLowerCase()] ?? "bg-gray-100 text-gray-500")}>
+                      {f.status?.toLowerCase()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {fees.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-gray-100 py-12 text-center">
+          <p className="text-sm text-gray-400">No fee records for this student.</p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100">
+            <h2 className="text-sm font-semibold text-gray-700">All Fee Records</h2>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                {["Fee Type", "Amount Due", "Amount Paid", "Due Date", "Status"].map((h) => (
+                  <th key={h} className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {fees.map((f: any) => {
+                const dueStr = f.dueDate ? new Date(f.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
+                return (
+                  <tr key={f.id} className="border-t border-gray-50 hover:bg-gray-50/60">
+                    <td className="px-5 py-3.5 font-medium text-gray-900">{f.feeTypeName}</td>
+                    <td className="px-5 py-3.5 text-gray-700">NPR {Number(f.amountDue).toLocaleString("en-IN")}</td>
+                    <td className="px-5 py-3.5 text-gray-700">NPR {Number(f.amountPaid).toLocaleString("en-IN")}</td>
+                    <td className="px-5 py-3.5 text-gray-500">{dueStr}</td>
+                    <td className="px-5 py-3.5">
+                      <span className={cn("text-xs px-2 py-1 rounded-lg font-medium capitalize", statusColor[f.status?.toLowerCase()] ?? "bg-gray-100 text-gray-500")}>
+                        {f.status?.toLowerCase()}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
