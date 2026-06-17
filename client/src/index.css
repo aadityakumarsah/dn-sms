@@ -1,0 +1,25 @@
+@import "../styles/globals.css";
+
+@layer base {
+  :root {
+    @apply font-sans;
+  }
+
+  /* Reset body — the SMS portals need full-screen flex layouts, not centered grid */
+  body {
+    @apply m-0 p-0 min-w-[320px] bg-background text-foreground;
+    display: block;
+  }
+
+  #root {
+    @apply w-full h-screen;
+  }
+
+  /* Placeholders were too dark/heavy — soften them so they read as hints,
+     not as filled-in values. Applies to every input/textarea app-wide. */
+  input::placeholder,
+  textarea::placeholder {
+    @apply text-gray-400;
+    opacity: 0.55;
+  }
+}
