@@ -8,7 +8,13 @@ interface ProtectedRouteProps {
 }
 
 export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, isInitializing } = useAuth();
+
+  if (isInitializing) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
 
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!allowedRoles.includes(user!.role)) return <Navigate to="/login" replace />;

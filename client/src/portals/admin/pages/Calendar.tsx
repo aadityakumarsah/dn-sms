@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // BS (Bikram Sambat) calendar utility
@@ -72,6 +72,7 @@ function bsFirstWeekday(year: number, month: number): number {
 interface CalEvent { id: string; day: number; title: string; color: string; }
 
 const EVENT_COLORS = ["bg-blue-100 text-blue-800", "bg-emerald-100 text-emerald-800", "bg-amber-100 text-amber-800", "bg-rose-100 text-rose-700", "bg-purple-100 text-purple-800"];
+const EVENT_DOT_COLORS = ["bg-blue-400", "bg-emerald-400", "bg-amber-400", "bg-rose-400", "bg-purple-400"];
 
 export default function Calendar() {
   const today = adToBS(new Date());
@@ -84,6 +85,7 @@ export default function Calendar() {
   ]);
   const [addDay, setAddDay] = useState<number | null>(null);
   const [newEventTitle, setNewEventTitle] = useState("");
+  const [selectedColor, setSelectedColor] = useState(EVENT_COLORS[0]);
 
   const yearData = BS_YEAR_DATA[viewYear] ?? BS_YEAR_DATA[2081];
   const daysInMonth = yearData[viewMonth];
@@ -99,9 +101,14 @@ export default function Calendar() {
 
   const addEvent = () => {
     if (!newEventTitle.trim() || addDay === null) return;
-    setEvents([...events, { id: String(Date.now()), day: addDay, title: newEventTitle.trim(), color: EVENT_COLORS[events.length % EVENT_COLORS.length] }]);
+    setEvents([...events, { id: String(Date.now()), day: addDay, title: newEventTitle.trim(), color: selectedColor }]);
     setNewEventTitle("");
     setAddDay(null);
+  };
+
+  const deleteEvent = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEvents(events.filter((ev) => ev.id !== id));
   };
 
   const cells = Array.from({ length: firstWeekday }, () => null).concat(Array.from({ length: daysInMonth }, (_, i) => i + 1));
@@ -152,8 +159,11 @@ export default function Calendar() {
                         {day}
                       </div>
                       {(monthEvents[day] ?? []).map((e) => (
-                        <div key={e.id} className={cn("text-xs px-1.5 py-0.5 rounded-md mb-0.5 truncate font-medium", e.color)}>
-                          {e.title}
+                        <div key={e.id} className={cn("text-xs px-1.5 py-0.5 rounded-md mb-0.5 font-medium flex items-center gap-0.5 group/ev", e.color)}>
+                          <span className="truncate flex-1">{e.title}</span>
+                          <button onClick={(ev) => deleteEvent(e.id, ev)} className="shrink-0 opacity-0 group-hover/ev:opacity-100 hover:text-red-600 transition-opacity leading-none">
+                            <X className="w-2.5 h-2.5" />
+                          </button>
                         </div>
                       ))}
                     </>
@@ -171,8 +181,16 @@ export default function Calendar() {
           <div className="relative bg-white rounded-2xl shadow-xl p-5 max-w-xs w-full">
             <h3 className="font-bold text-gray-900 mb-3 text-sm">Add Event — {BS_MONTHS[viewMonth]} {addDay}, {viewYear}</h3>
             <input value={newEventTitle} onChange={(e) => setNewEventTitle(e.target.value)} placeholder="Event title"
-              onKeyDown={(e) => e.key === "Enter" && addEvent()}
+              onKeyDown={(e) => e.key === "Enter" && addEvent()} autoFocus
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400 mb-3" />
+            <div className="flex gap-1.5 mb-4">
+              {EVENT_COLORS.map((c, i) => (
+                <button key={c} type="button" onClick={() => setSelectedColor(c)}
+                  className={cn("w-6 h-6 rounded-full border-2 transition-all", EVENT_DOT_COLORS[i],
+                    selectedColor === c ? "border-gray-700 scale-110" : "border-transparent")}>
+                </button>
+              ))}
+            </div>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setAddDay(null)} className="px-3 py-1.5 text-sm text-gray-500">Cancel</button>
               <button onClick={addEvent} disabled={!newEventTitle.trim()}

@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  Search, Plus, Download, MoreHorizontal, CheckCircle2, AlertCircle,
-  Eye, Edit3, Trash2, RefreshCw, X, ChevronDown, Building2,
-  Phone, Mail, MapPin, Calendar, Users, BookOpen, CreditCard
+  Search, Plus, Download, Eye, Edit3, Trash2, RefreshCw, X, ChevronDown, Building2,
+  Phone, Mail, MapPin, Calendar, Users, BookOpen, CreditCard, Copy, CheckCheck, Key
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -37,12 +36,12 @@ const AFFILIATIONS = [
 ];
 
 const SCHOOL_TYPES = [
-  { value: "PRIMARY", label: "Primary School (1-5)" },
-  { value: "LOWER_SECONDARY", label: "Lower Secondary (1-8)" },
-  { value: "SECONDARY", label: "Secondary School (1-10)" },
-  { value: "HIGHER_SECONDARY", label: "Higher Secondary (+2)" },
-  { value: "COLLEGE", label: "College / Campus" },
-  { value: "UNIVERSITY", label: "University" },
+  { value: "PRIMARY", label: "Primary School (Nursery - 5)" },
+  { value: "LOWER_SECONDARY", label: "Lower Secondary (Nursery - 8)" },
+  { value: "SECONDARY", label: "Secondary School (Nursery - 10)" },
+  { value: "HIGHER_SECONDARY", label: "Secondary School (Nursery - 12)" },
+  // { value: "COLLEGE", label: "College / Campus" },
+  // { value: "UNIVERSITY", label: "University" },
 ];
 
 // ─── Status Config ────────────────────────────────────────────────────────────
@@ -61,6 +60,62 @@ const PLAN_BADGE: Record<string, string> = {
   basic:      "bg-gray-100 text-gray-600",
   free:       "bg-gray-50 text-gray-400",
 };
+
+// ─── Credentials Modal ───────────────────────────────────────────────────────
+
+function CredField({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+  return (
+    <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-200">
+      <p className="text-xs font-medium text-gray-500 mb-1">{label}</p>
+      <div className="flex items-center justify-between gap-2">
+        <code className="text-sm font-mono text-gray-900 break-all select-all">{value}</code>
+        <button onClick={copy} className="shrink-0 p-1.5 rounded-lg hover:bg-white border border-transparent hover:border-gray-200 transition-all text-gray-400 hover:text-gray-700">
+          {copied ? <CheckCheck className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CredentialsModal({ open, onClose, creds }: { open: boolean; onClose: () => void; creds: any | null }) {
+  if (!open || !creds) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+        <div className="bg-gradient-to-r from-purple-600 to-purple-700 px-6 py-5 text-white">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+              <Key className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-bold text-base">School Created!</h2>
+              <p className="text-purple-200 text-xs mt-0.5">Save these credentials — password won't be shown again</p>
+            </div>
+          </div>
+        </div>
+        <div className="p-6 space-y-3">
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700 font-medium">
+            ⚠ Share these credentials securely with the school principal. They can change the password after first login.
+          </div>
+          <CredField label="School Slug (for login)" value={creds.schoolSlug ?? creds.slug ?? ""} />
+          <CredField label="Admin Email" value={creds.email ?? ""} />
+          <CredField label="Temporary Password" value={creds.password ?? ""} />
+          {creds.schoolName && <CredField label="School Name" value={creds.schoolName} />}
+        </div>
+        <div className="px-6 pb-6">
+          <button onClick={onClose} className="w-full bg-purple-600 text-white font-semibold py-2.5 rounded-xl hover:bg-purple-700 transition-colors text-sm">
+            Done — I've saved these credentials
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── School Form Modal ────────────────────────────────────────────────────────
 
@@ -111,6 +166,11 @@ function SchoolModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState("basic");
+  const [resetCreds, setResetCreds] = useState<any>(null);
+  const [resetting, setResetting] = useState(false);
+  const [editEmail, setEditEmail] = useState<string>("");
+  const [editPassword, setEditPassword] = useState<string>("");
+  const [savingCreds, setSavingCreds] = useState(false);
 
   useEffect(() => {
     if (initial) {
@@ -133,9 +193,46 @@ function SchoolModal({
     }
     setError(null);
     setTab("basic");
+    setResetCreds(null);
+    setEditEmail(initial?.adminUser?.email ?? "");
+    setEditPassword("");
   }, [initial, open]);
 
   const set = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
+
+  const handleResetPassword = async () => {
+    if (!initial?.id) return;
+    if (!confirm("Reset the admin password? The current password will stop working immediately.")) return;
+    setResetting(true);
+    setError(null);
+    try {
+      const result = await api.superAdmin.resetAdminPassword(initial.id);
+      setResetCreds(result.credentials);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const handleSaveCredentials = async () => {
+    if (!initial?.id) return;
+    if (!editEmail.trim() && !editPassword.trim()) { setError("Enter an email or password to update"); return; }
+    setSavingCreds(true);
+    setError(null);
+    try {
+      const result = await api.superAdmin.updateAdminCredentials(initial.id, {
+        email: editEmail !== initial.adminUser?.email ? editEmail : undefined,
+        password: editPassword ? editPassword : undefined,
+      });
+      setResetCreds(result.credentials);
+      setEditPassword("");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSavingCreds(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!form.name.trim()) { setError("School name is required"); return; }
@@ -154,7 +251,7 @@ function SchoolModal({
   if (!open) return null;
 
   const districts = form.province ? (DISTRICTS_BY_PROVINCE[form.province] ?? []) : [];
-  const TABS = ["basic", "location", "principal", "plan"];
+  const TABS = initial ? ["basic", "location", "principal", "plan", "credentials"] : ["basic", "location", "principal", "plan"];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -177,7 +274,7 @@ function SchoolModal({
             <button key={t} onClick={() => setTab(t)}
               className={cn("px-4 py-2 text-xs font-medium rounded-t-lg capitalize transition-colors",
                 tab === t ? "bg-purple-50 text-purple-700 border-b-2 border-purple-500" : "text-gray-400 hover:text-gray-600")}>
-              {t === "plan" ? "Plan & Status" : t === "basic" ? "School Info" : t === "location" ? "Location" : "Principal"}
+              {t === "plan" ? "Plan & Status" : t === "basic" ? "School Info" : t === "location" ? "Location" : t === "credentials" ? "Credentials" : "Principal"}
             </button>
           ))}
         </div>
@@ -244,6 +341,55 @@ function SchoolModal({
                 <InputField label="Principal Phone" k="principalPhone" placeholder="9841xxxxxx" form={form} set={set} />
                 <InputField label="Principal Email" k="principalEmail" type="email" placeholder="principal@school.edu.np" form={form} set={set} />
               </div>
+            </div>
+          )}
+
+          {tab === "credentials" && (
+            <div className="space-y-5">
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700">
+                Edit admin credentials for this school. Leave fields empty to keep current values.
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <p className="text-xs font-medium text-gray-500 mb-1.5">School Slug (login identifier)</p>
+                  <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
+                    <code className="text-sm font-mono text-gray-900">{initial?.slug ?? "—"}</code>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Admin Email</label>
+                  <input type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)}
+                    placeholder="Leave blank to keep current"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition-all" />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Custom Password</label>
+                  <input type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)}
+                    placeholder="Enter custom password or leave blank"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition-all" />
+                  <p className="text-xs text-gray-400 mt-1">Min 6 characters. Leave blank to keep current password.</p>
+                </div>
+
+                {resetCreds && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2.5">
+                    <p className="text-xs font-semibold text-emerald-700 flex items-center gap-1.5">
+                      <CheckCheck className="w-3.5 h-3.5" /> Credentials Updated — Save these now!
+                    </p>
+                    <CredField label="Email" value={resetCreds.email ?? ""} />
+                    {resetCreds.password && <CredField label="Password" value={resetCreds.password} />}
+                    <p className="text-xs text-emerald-600">Credentials will not be shown again.</p>
+                  </div>
+                )}
+              </div>
+
+              <button onClick={handleSaveCredentials} disabled={savingCreds}
+                className="w-full flex items-center justify-center gap-2 bg-purple-600 text-white font-medium py-2.5 rounded-xl hover:bg-purple-700 disabled:opacity-50 transition-colors text-sm">
+                {savingCreds ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
+                {savingCreds ? "Saving..." : "Save Credentials"}
+              </button>
             </div>
           )}
 
@@ -348,7 +494,7 @@ function SchoolModal({
 
 // ─── School Detail Panel ──────────────────────────────────────────────────────
 
-function SchoolDetail({ id, onClose, onEdit, plans }: { id: string; onClose: () => void; onEdit: () => void; plans: any[] }) {
+function SchoolDetail({ id, onClose, onEdit, plans }: { id: string; onClose: () => void; onEdit: (school: any) => void; plans: any[] }) {
   const [school, setSchool] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -389,7 +535,7 @@ function SchoolDetail({ id, onClose, onEdit, plans }: { id: string; onClose: () 
             </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={onEdit} className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-xl hover:bg-purple-700 font-medium">Edit</button>
+            <button onClick={() => onEdit(school)} className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-xl hover:bg-purple-700 font-medium">Edit</button>
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
           </div>
         </div>
@@ -561,6 +707,7 @@ export default function Schools() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editSchool, setEditSchool] = useState<any | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [createdCreds, setCreatedCreds] = useState<any | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -579,8 +726,15 @@ export default function Schools() {
     setSelected((p) => p.includes(id) ? p.filter((i) => i !== id) : [...p, id]);
 
   const handleCreate = async (data: any) => {
-    await api.superAdmin.createSchool(data);
+    const result = await api.auth.createSchool(data);
     load();
+    if (result?.admin) {
+      setCreatedCreds({
+        ...result.admin,
+        schoolSlug: result.school?.slug ?? "",
+        schoolName: result.school?.name ?? "",
+      });
+    }
   };
 
   const handleEdit = async (data: any) => {
@@ -780,12 +934,15 @@ export default function Schools() {
           id={detailId}
           plans={plans}
           onClose={() => setDetailId(null)}
-          onEdit={() => {
-            const s = schools.find((x) => x.id === detailId);
-            if (s) { setDetailId(null); openEdit(s); }
-          }}
+          onEdit={(school) => { setDetailId(null); openEdit(school); }}
         />
       )}
+
+      <CredentialsModal
+        open={!!createdCreds}
+        onClose={() => setCreatedCreds(null)}
+        creds={createdCreds}
+      />
     </>
   );
 }

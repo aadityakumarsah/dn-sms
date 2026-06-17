@@ -129,14 +129,12 @@ export async function createSchoolWithAdmin(
     },
   });
 
-  // Create audit log
+  // Create audit log (use relation connect; generated client may not expose scalar FK directly)
   await prisma.auditLog.create({
     data: {
-      schoolId: school.id,
+      school: { connect: { id: school.id } },
       action: "school.created_with_admin",
-      entityType: "School",
-      entityId: school.id,
-      details: JSON.stringify({ adminEmail, createdBy: superAdminId }),
+      metadata: { adminEmail, createdBy: superAdminId },
     },
   });
 
