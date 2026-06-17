@@ -1302,6 +1302,60 @@ async function createAcademicYear(req: Request, h: Headers): Promise<Response> {
   return json(ay, 201, h);
 }
 
+async function updateAcademicYear(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  const ay = await prisma.academicYear.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!ay) return err("Not found", 404, h);
+  const body = await req.json().catch(() => null);
+  if (!body) return err("No data", 400, h);
+  if (body.isActive) await prisma.academicYear.updateMany({ where: { schoolId: u.schoolId, id: { not: id } }, data: { isActive: false } });
+  const updated = await prisma.academicYear.update({
+    where: { id },
+    data: {
+      name: body.name ?? ay.name,
+      startDate: body.startDate ? new Date(body.startDate) : ay.startDate,
+      endDate: body.endDate ? new Date(body.endDate) : ay.endDate,
+      isActive: body.isActive !== undefined ? body.isActive : ay.isActive,
+    },
+  });
+  return json(updated, 200, h);
+}
+
+async function deleteAcademicYear(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  const ay = await prisma.academicYear.findFirst({ where: { id, schoolId: u.schoolId }, include: { _count: { select: { enrollments: true } } } });
+  if (!ay) return err("Not found", 404, h);
+  if ((ay as any)._count.enrollments > 0) return err("Cannot delete: this year has student enrollments. Archive it instead.", 400, h);
+  await prisma.academicYear.delete({ where: { id } });
+  return json({ ok: true }, 200, h);
+}
+
+async function getPromotionPreview(req: Request, h: Headers, url: URL): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  const fromYearId = url.searchParams.get("fromYearId");
+  if (!fromYearId) return err("fromYearId required", 400, h);
+
+  const sections = await prisma.section.findMany({
+    where: { grade: { schoolId: u.schoolId, academicYearId: fromYearId } },
+    include: {
+      grade: true,
+      _count: { select: { enrollments: { where: { academicYearId: fromYearId, status: "ACTIVE" } } } },
+    },
+    orderBy: [{ grade: { gradeNumber: "asc" } }, { name: "asc" }],
+  });
+
+  return json(sections.map((s) => ({
+    id: s.id,
+    label: `${s.grade.name} — ${s.name}`,
+    gradeName: s.grade.name,
+    sectionName: s.name,
+    studentCount: (s._count as any).enrollments,
+  })), 200, h);
+}
+
 async function getAttendance(req: Request, h: Headers, url: URL): Promise<Response> {
   const u = await authSchool(req);
   if (!u) return err("Unauthorized", 401, h);
@@ -1323,8 +1377,10 @@ async function getAttendance(req: Request, h: Headers, url: URL): Promise<Respon
       students: enrollments.map((e) => {
         const att = e.student.attendances[0];
         return {
-          studentId: e.student.id, rollNo: e.rollNo,
+          studentId: e.student.id, rollNo: e.rollNo ?? e.student.rollNumber ?? null,
           name: e.student.user.profile ? `${e.student.user.profile.firstName} ${e.student.user.profile.lastName}`.trim() : e.student.user.email,
+          avatar: e.student.user.profile?.avatar ?? null,
+          stream: e.student.stream ?? null,
           status: att?.status ?? null, attendanceId: att?.id ?? null,
         };
       }),
@@ -1578,7 +1634,7 @@ async function teacherDashboard(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
   if (!u || u.role !== "TEACHER") return err("Unauthorized", 401, h);
 
-  const teacher = await prisma.teacher.findFirst({ where: { userId: u.id } });
+  const teacher = await prisma.teacher.findFirst({ where: { userId: u.id }, include: { user: { include: { profile: true } } } });
   if (!teacher) return err("Teacher record not found", 404, h);
 
   const [mySubjects, myClasses, pendingAssignments, recentNotices] = await Promise.all([
@@ -1588,7 +1644,20 @@ async function teacherDashboard(req: Request, h: Headers): Promise<Response> {
     prisma.notice.findMany({ where: { schoolId: u.schoolId, OR: [{ targetRole: null }, { targetRole: "TEACHER" }] }, orderBy: { publishedAt: "desc" }, take: 5 }),
   ]);
 
-  return json({ teacher, mySubjects: mySubjects.map((a) => a.subject), myClasses: myClasses.map((c) => ({ id: c.id, name: `${c.grade.name} ${c.name}`, students: c._count.enrollments })), pendingAssignments, recentNotices }, 200, h);
+  const profile = teacher.user.profile;
+  const totalStudents = myClasses.reduce((sum, c) => sum + c._count.enrollments, 0);
+  return json({
+    teacher,
+    profile: {
+      name: profile ? `${profile.firstName} ${profile.lastName}`.trim() : teacher.user.email,
+      avatar: profile?.avatar ?? null,
+      specialization: teacher.specialization ?? null,
+    },
+    mySubjects: mySubjects.map((a) => a.subject),
+    myClasses: myClasses.map((c) => ({ id: c.id, name: `${c.grade.name} ${c.name}`, students: c._count.enrollments })),
+    totalStudents,
+    pendingAssignments, recentNotices,
+  }, 200, h);
 }
 
 async function getTeacherClasses(req: Request, h: Headers): Promise<Response> {
@@ -1605,7 +1674,13 @@ async function getTeacherClasses(req: Request, h: Headers): Promise<Response> {
 
   return json(sections.map((s) => ({
     id: s.id, name: `${s.grade.name} ${s.name}`, gradeNumber: s.grade.gradeNumber,
-    students: s.enrollments.map((e) => ({ id: e.student.id, rollNo: e.rollNo, name: e.student.user.profile ? `${e.student.user.profile.firstName} ${e.student.user.profile.lastName}`.trim() : e.student.user.email })),
+    students: s.enrollments.map((e) => ({
+      id: e.student.id,
+      rollNo: e.rollNo ?? e.student.rollNumber ?? null,
+      name: e.student.user.profile ? `${e.student.user.profile.firstName} ${e.student.user.profile.lastName}`.trim() : e.student.user.email,
+      avatar: e.student.user.profile?.avatar ?? null,
+      stream: e.student.stream ?? null,
+    })),
   })), 200, h);
 }
 
@@ -1639,20 +1714,49 @@ async function studentDashboard(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
   if (!u || u.role !== "STUDENT") return err("Unauthorized", 401, h);
 
-  const student = await prisma.student.findFirst({ where: { userId: u.id } });
+  const student = await prisma.student.findFirst({ where: { userId: u.id }, include: { user: { include: { profile: true } } } });
   if (!student) return err("Student record not found", 404, h);
 
-  const [enrollment, attendance, pendingFees, notices] = await Promise.all([
-    prisma.studentEnrollment.findFirst({ where: { studentId: student.id, status: "ACTIVE" }, include: { section: { include: { grade: true } }, academicYear: true } }),
+  const [enrollment, attendance, pendingFees, notices, recentResults] = await Promise.all([
+    prisma.studentEnrollment.findFirst({ where: { studentId: student.id, status: "ACTIVE" }, include: { section: { include: { grade: true, _count: { select: { subjectAssignments: true } } } }, academicYear: true } }),
     prisma.studentAttendance.findMany({ where: { studentId: student.id }, orderBy: { date: "desc" }, take: 30 }),
     prisma.feeCollection.findMany({ where: { studentId: student.id, status: { in: ["PENDING", "OVERDUE"] } } }),
     prisma.notice.findMany({ where: { schoolId: u.schoolId, OR: [{ targetRole: null }, { targetRole: "STUDENT" }] }, orderBy: { publishedAt: "desc" }, take: 5 }),
+    prisma.examResult.findMany({ where: { studentId: student.id }, orderBy: { createdAt: "desc" }, take: 5, include: { examSubject: { include: { subject: true, exam: true } } } }),
   ]);
 
   const present = attendance.filter((a) => a.status === "PRESENT").length;
   const attPct = attendance.length > 0 ? Math.round((present / attendance.length) * 100) : 0;
+  const profile = student.user.profile;
+  const name = profile ? `${profile.firstName} ${profile.lastName}`.trim() : student.user.email;
+  const pendingFeeTotal = pendingFees.reduce((sum, f) => sum + Number(f.amountDue) - Number(f.amountPaid), 0);
 
-  return json({ student, enrollment, attendancePct: attPct, totalDays: attendance.length, presentDays: present, pendingFees, notices }, 200, h);
+  return json({
+    student,
+    profile: {
+      name,
+      avatar: profile?.avatar ?? null,
+      stream: student.stream ?? null,
+      rollNumber: enrollment?.rollNo ?? student.rollNumber ?? null,
+      admissionNo: student.admissionNo,
+      className: enrollment ? `${enrollment.section.grade.name} ${enrollment.section.name}` : null,
+      academicYear: enrollment?.academicYear?.name ?? null,
+    },
+    enrollment,
+    attendancePct: attPct, totalDays: attendance.length, presentDays: present,
+    subjectsCount: enrollment?.section?._count?.subjectAssignments ?? 0,
+    pendingFees, pendingFeeTotal,
+    recentResults: recentResults.map((r) => ({
+      id: r.id,
+      subject: r.examSubject.subject.name,
+      exam: r.examSubject.exam.name,
+      marksObtained: Number(r.marksObtained),
+      fullMarks: r.examSubject.fullMarks,
+      grade: r.grade,
+      isPassed: r.isPassed,
+    })),
+    notices,
+  }, 200, h);
 }
 
 async function getStudentAttendance(req: Request, h: Headers, url: URL): Promise<Response> {
@@ -1703,7 +1807,7 @@ async function parentDashboard(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
   if (!u || u.role !== "PARENT") return err("Unauthorized", 401, h);
 
-  const parent = await prisma.parent.findFirst({ where: { userId: u.id }, include: { children: { include: { student: { include: { user: { include: { profile: true } }, enrollments: { where: { status: "ACTIVE" }, include: { section: { include: { grade: true } } } }, attendances: { orderBy: { date: "desc" }, take: 30 }, feeCollections: { where: { status: { in: ["PENDING", "OVERDUE"] } } } } } } } } });
+  const parent = await prisma.parent.findFirst({ where: { userId: u.id }, include: { children: { include: { student: { include: { user: { include: { profile: true } }, enrollments: { where: { status: "ACTIVE" }, include: { section: { include: { grade: true } }, academicYear: true } }, attendances: { orderBy: { date: "desc" }, take: 30 }, feeCollections: { where: { status: { in: ["PENDING", "OVERDUE"] } } }, examResults: { orderBy: { createdAt: "desc" }, take: 5, include: { examSubject: { include: { subject: true } } } } } } } } } });
   if (!parent) return err("Parent record not found", 404, h);
 
   const notices = await prisma.notice.findMany({ where: { schoolId: u.schoolId, OR: [{ targetRole: null }, { targetRole: "PARENT" }] }, orderBy: { publishedAt: "desc" }, take: 5 });
@@ -1714,12 +1818,25 @@ async function parentDashboard(req: Request, h: Headers): Promise<Response> {
       const s = link.student;
       const att = s.attendances;
       const present = att.filter((a) => a.status === "PRESENT").length;
+      const enr = s.enrollments[0];
+      const pendingFeeTotal = s.feeCollections.reduce((sum, f) => sum + Number(f.amountDue) - Number(f.amountPaid), 0);
       return {
         id: s.id, name: s.user.profile ? `${s.user.profile.firstName} ${s.user.profile.lastName}`.trim() : s.user.email,
+        avatar: s.user.profile?.avatar ?? null,
         admissionNo: s.admissionNo, relationship: link.relationship,
-        className: s.enrollments[0] ? `${s.enrollments[0].section.grade.name} ${s.enrollments[0].section.name}` : null,
+        stream: s.stream ?? null,
+        rollNo: enr?.rollNo ?? s.rollNumber ?? null,
+        className: enr ? `${enr.section.grade.name} ${enr.section.name}` : null,
+        academicYear: enr?.academicYear?.name ?? null,
         attendancePct: att.length ? Math.round((present / att.length) * 100) : 0,
         pendingFees: s.feeCollections.length,
+        pendingFeeTotal,
+        recentResults: s.examResults.map((r) => ({
+          subject: r.examSubject.subject.name,
+          marksObtained: Number(r.marksObtained),
+          fullMarks: r.examSubject.fullMarks,
+          grade: r.grade,
+        })),
       };
     }),
     notices,
@@ -2600,9 +2717,15 @@ Bun.serve({
       if (req.method === "GET") return getAcademicYears(req, h);
       if (req.method === "POST") return createAcademicYear(req, h);
     }
+    const academicYearMatch = p.match(/^\/api\/admin\/academic-years\/([^/]+)$/);
+    if (academicYearMatch) {
+      if (req.method === "PATCH") return updateAcademicYear(req, h, academicYearMatch[1]);
+      if (req.method === "DELETE") return deleteAcademicYear(req, h, academicYearMatch[1]);
+    }
 
     // Student Promotion
     if (p === "/api/admin/promote" && req.method === "POST") return promoteStudents(req, h);
+    if (p === "/api/admin/promote/preview" && req.method === "GET") return getPromotionPreview(req, h, url);
 
     // Attendance
     if (p === "/api/admin/attendance") {

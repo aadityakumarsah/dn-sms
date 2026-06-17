@@ -146,7 +146,6 @@ export const api = {
     createSection: (gradeId: string, data: Record<string, unknown>) => request<any>(`/api/admin/grades/${gradeId}/sections`, { method: "POST", body: JSON.stringify(data) }),
     sectionDetail: (id: string) => request<any>(`/api/admin/sections/${id}`),
     updateSection: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/sections/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-    updateSection: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/sections/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     deleteSection: (id: string) => request<any>(`/api/admin/sections/${id}`, { method: "DELETE" }),
 
     // Transport / Buses
@@ -160,6 +159,9 @@ export const api = {
     deleteBusRoute: (id: string) => request<any>(`/api/admin/bus-routes/${id}`, { method: "DELETE" }),
     academicYears: () => request<any[]>("/api/admin/academic-years"),
     createAcademicYear: (data: Record<string, unknown>) => request<any>("/api/admin/academic-years", { method: "POST", body: JSON.stringify(data) }),
+    updateAcademicYear: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/academic-years/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteAcademicYear: (id: string) => request<any>(`/api/admin/academic-years/${id}`, { method: "DELETE" }),
+    promotionPreview: (fromYearId: string) => request<any[]>(`/api/admin/promote/preview?fromYearId=${fromYearId}`),
     promoteStudents: (data: Record<string, unknown>) => request<any>("/api/admin/promote", { method: "POST", body: JSON.stringify(data) }),
 
     // Attendance
