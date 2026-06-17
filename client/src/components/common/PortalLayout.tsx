@@ -1,10 +1,11 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { LogOut, Menu, X, ChevronDown, Bell, Search } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { PORTAL_CONFIGS, APP_NAME } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type { NavItem, NavSection } from "@/types";
+import { api } from "@/lib/api";
 
 interface PortalLayoutProps {
   children: React.ReactNode;
@@ -48,9 +49,37 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
   const isActive = (href: string) =>
     location.pathname === href || (href !== "/super-admin" && href !== "/admin" && location.pathname.startsWith(href + "/"));
 
+  const [schoolsCount, setSchoolsCount] = useState<number | undefined>(undefined);
+  const [announcementsCount, setAnnouncementsCount] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (user?.role === "super_admin") {
+      api.superAdmin.schools({ limit: 1 })
+        .then((res) => setSchoolsCount(res.total))
+        .catch(console.error);
+
+      api.superAdmin.announcements()
+        .then((res) => setAnnouncementsCount(res.length))
+        .catch(console.error);
+    }
+  }, [user?.role]);
+
   const sections: NavSection[] = isNavSections(navItems)
     ? navItems
     : [{ section: "", items: navItems as NavItem[] }];
+
+  const dynamicSections = sections.map((section) => ({
+    ...section,
+    items: section.items.map((item) => {
+      if (item.label === "Schools" && schoolsCount !== undefined) {
+        return { ...item, badge: schoolsCount };
+      }
+      if (item.label === "Announcements" && announcementsCount !== undefined) {
+        return { ...item, badge: announcementsCount };
+      }
+      return item;
+    }),
+  }));
 
   const renderNavItem = (item: NavItem) => {
     const Icon = item.icon;
@@ -174,7 +203,7 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
-          {sections.map((sec) => (
+          {dynamicSections.map((sec) => (
             <div key={sec.section}>
               {sec.section && (
                 <p className={cn("text-[10px] font-semibold uppercase tracking-widest px-3 mb-1.5", isDark ? "text-white/25" : "text-gray-400")}>

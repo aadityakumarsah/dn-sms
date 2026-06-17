@@ -73,6 +73,31 @@ const EMPTY_FORM = {
   schoolType: "SECONDARY", status: "TRIAL", planId: "", notes: "",
 };
 
+const InputField = ({ label, k, form, set, type = "text", placeholder = "", required = false }: any) => (
+  <div>
+    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+      {label} {required && <span className="text-rose-500">*</span>}
+    </label>
+    <input type={type} value={form[k] ?? ""} onChange={(e) => set(k, e.target.value)} placeholder={placeholder}
+      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition-all" />
+  </div>
+);
+
+const SelectField = ({ label, k, form, set, options, required = false }: any) => (
+  <div>
+    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+      {label} {required && <span className="text-rose-500">*</span>}
+    </label>
+    <select value={form[k] ?? ""} onChange={(e) => set(k, e.target.value)}
+      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400 bg-white">
+      <option value="">— Select —</option>
+      {options.map((o: any) => (
+        <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
+      ))}
+    </select>
+  </div>
+);
+
 function SchoolModal({
   open, onClose, initial, plans, onSave
 }: {
@@ -131,31 +156,6 @@ function SchoolModal({
   const districts = form.province ? (DISTRICTS_BY_PROVINCE[form.province] ?? []) : [];
   const TABS = ["basic", "location", "principal", "plan"];
 
-  const InputField = ({ label, k, type = "text", placeholder = "", required = false }: any) => (
-    <div>
-      <label className="block text-xs font-medium text-gray-600 mb-1.5">
-        {label} {required && <span className="text-rose-500">*</span>}
-      </label>
-      <input type={type} value={form[k]} onChange={(e) => set(k, e.target.value)} placeholder={placeholder}
-        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition-all" />
-    </div>
-  );
-
-  const SelectField = ({ label, k, options, required = false }: any) => (
-    <div>
-      <label className="block text-xs font-medium text-gray-600 mb-1.5">
-        {label} {required && <span className="text-rose-500">*</span>}
-      </label>
-      <select value={form[k]} onChange={(e) => set(k, e.target.value)}
-        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400 bg-white">
-        <option value="">— Select —</option>
-        {options.map((o: any) => (
-          <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
-        ))}
-      </select>
-    </div>
-  );
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
@@ -190,26 +190,26 @@ function SchoolModal({
 
           {tab === "basic" && (
             <div className="space-y-4">
-              <InputField label="School / College / University Name" k="name" required placeholder="e.g. Bagmati Secondary School" />
+              <InputField label="School / College / University Name" k="name" required placeholder="e.g. Bagmati Secondary School" form={form} set={set} />
               <div className="grid grid-cols-2 gap-4">
                 <SelectField label="Institution Type" k="schoolType" required
-                  options={SCHOOL_TYPES} />
-                <InputField label="Established Year (BS)" k="establishedYear" type="number" placeholder="e.g. 2040" />
+                  options={SCHOOL_TYPES} form={form} set={set} />
+                <InputField label="Established Year (BS)" k="establishedYear" type="number" placeholder="e.g. 2040" form={form} set={set} />
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <InputField label="Registration Number" k="registrationNo" placeholder="School reg. no." />
-                <InputField label="PAN / VAT Number" k="panNo" placeholder="PAN number" />
+                <InputField label="Registration Number" k="registrationNo" placeholder="School reg. no." form={form} set={set} />
+                <InputField label="PAN / VAT Number" k="panNo" placeholder="PAN number" form={form} set={set} />
               </div>
-              <SelectField label="Affiliated To / Board" k="affiliatedTo" options={AFFILIATIONS} />
+              <SelectField label="Affiliated To / Board" k="affiliatedTo" options={AFFILIATIONS} form={form} set={set} />
               <div className="grid grid-cols-2 gap-4">
-                <InputField label="Phone Number" k="phone" placeholder="01-4xxxxxx" />
-                <InputField label="Alternate Phone" k="altPhone" placeholder="9841xxxxxx" />
+                <InputField label="Phone Number" k="phone" placeholder="01-4xxxxxx" form={form} set={set} />
+                <InputField label="Alternate Phone" k="altPhone" placeholder="9841xxxxxx" form={form} set={set} />
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <InputField label="Email Address" k="email" type="email" placeholder="school@email.com" />
-                <InputField label="Website" k="website" placeholder="https://school.edu.np" />
+                <InputField label="Email Address" k="email" type="email" placeholder="school@email.com" form={form} set={set} />
+                <InputField label="Website" k="website" placeholder="https://school.edu.np" form={form} set={set} />
               </div>
-              <InputField label="Total Student Capacity" k="totalCapacity" type="number" placeholder="e.g. 800" />
+              <InputField label="Total Student Capacity" k="totalCapacity" type="number" placeholder="e.g. 800" form={form} set={set} />
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Notes (Internal)</label>
                 <textarea value={form.notes} onChange={(e) => set("notes", e.target.value)}
@@ -223,11 +223,11 @@ function SchoolModal({
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <SelectField label="Province" k="province" required
-                  options={PROVINCES.map((p) => ({ value: p, label: p }))} />
+                  options={PROVINCES.map((p) => ({ value: p, label: p }))} form={form} set={set} />
                 <SelectField label="District" k="district" required
-                  options={districts.map((d) => ({ value: d, label: d }))} />
+                  options={districts.map((d) => ({ value: d, label: d }))} form={form} set={set} />
               </div>
-              <InputField label="City / Municipality" k="city" placeholder="e.g. Kathmandu Metropolitan" />
+              <InputField label="City / Municipality" k="city" placeholder="e.g. Kathmandu Metropolitan" form={form} set={set} />
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">Full Address</label>
                 <textarea value={form.address} onChange={(e) => set("address", e.target.value)} rows={3}
@@ -239,10 +239,10 @@ function SchoolModal({
 
           {tab === "principal" && (
             <div className="space-y-4">
-              <InputField label="Principal / Head Name" k="principalName" required placeholder="Full name" />
+              <InputField label="Principal / Head Name" k="principalName" required placeholder="Full name" form={form} set={set} />
               <div className="grid grid-cols-2 gap-4">
-                <InputField label="Principal Phone" k="principalPhone" placeholder="9841xxxxxx" />
-                <InputField label="Principal Email" k="principalEmail" type="email" placeholder="principal@school.edu.np" />
+                <InputField label="Principal Phone" k="principalPhone" placeholder="9841xxxxxx" form={form} set={set} />
+                <InputField label="Principal Email" k="principalEmail" type="email" placeholder="principal@school.edu.np" form={form} set={set} />
               </div>
             </div>
           )}

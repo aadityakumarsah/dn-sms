@@ -32,12 +32,48 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export const api = {
   auth: {
+    // Super Admin Auth
     loginSuperAdmin: (email: string, password: string) =>
       request<{ token: string; user: any }>("/api/auth/super-admin/login", { method: "POST", body: JSON.stringify({ email, password }) }),
     meSuperAdmin: () => request<any>("/api/auth/super-admin/me"),
+
+    // Create school with admin credentials (Super Admin only)
+    createSchool: (data: Record<string, unknown>) =>
+      request<any>("/api/auth/super-admin/create-school", { method: "POST", body: JSON.stringify(data) }),
+
+    // School User Auth
     loginSchool: (email: string, password: string, schoolSlug: string) =>
       request<{ token: string; user: any }>("/api/auth/school/login", { method: "POST", body: JSON.stringify({ email, password, schoolSlug }) }),
     meSchool: () => request<any>("/api/auth/school/me"),
+
+    // Password Management
+    changePassword: (currentPassword: string, newPassword: string) =>
+      request<{ success: boolean; message: string }>("/api/auth/school/change-password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword }),
+      }),
+    resetPassword: (userId: string) =>
+      request<{ credentials: any; message: string }>(`/api/auth/school/reset-password/${userId}`, { method: "POST" }),
+
+    // Create users by role (Admin only)
+    createTeacher: (data: Record<string, unknown>) =>
+      request<any>("/api/auth/school/users/teacher", { method: "POST", body: JSON.stringify(data) }),
+    createStaff: (data: Record<string, unknown>) =>
+      request<any>("/api/auth/school/users/staff", { method: "POST", body: JSON.stringify(data) }),
+    createStudent: (data: Record<string, unknown>) =>
+      request<any>("/api/auth/school/users/student", { method: "POST", body: JSON.stringify(data) }),
+    createParent: (data: Record<string, unknown>) =>
+      request<any>("/api/auth/school/users/parent", { method: "POST", body: JSON.stringify(data) }),
+
+    // Bulk create users
+    bulkCreateTeachers: (users: Array<Record<string, unknown>>) =>
+      request<any>("/api/auth/school/users/bulk/teacher", { method: "POST", body: JSON.stringify({ users }) }),
+    bulkCreateStaff: (users: Array<Record<string, unknown>>) =>
+      request<any>("/api/auth/school/users/bulk/staff", { method: "POST", body: JSON.stringify({ users }) }),
+    bulkCreateStudents: (users: Array<Record<string, unknown>>) =>
+      request<any>("/api/auth/school/users/bulk/student", { method: "POST", body: JSON.stringify({ users }) }),
+    bulkCreateParents: (users: Array<Record<string, unknown>>) =>
+      request<any>("/api/auth/school/users/bulk/parent", { method: "POST", body: JSON.stringify({ users }) }),
   },
 
   superAdmin: {

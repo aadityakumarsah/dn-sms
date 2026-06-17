@@ -1,6 +1,15 @@
 import { PrismaClient } from "./generated/prisma/client.ts";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { SignJWT, jwtVerify } from "jose";
+import {
+  createSchoolWithAdmin,
+  createUserByRole,
+  createBulkUsers,
+  loginSchoolUser,
+  updateUserPassword,
+  resetUserPassword,
+  getCurrentUser,
+} from "./auth.handlers.ts";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -58,8 +67,274 @@ async function authSA(req: Request): Promise<{ id: string; email: string } | nul
   return { id: p.id as string, email: p.email as string };
 }
 
+async function authSchoolUser(req: Request): Promise<{ id: string; role: string; schoolId: string; schoolSlug: string } | null> {
+  const token = getToken(req);
+  if (!token) return null;
+  const p = await verifyToken(token);
+  if (!p || p.role === "super_admin") return null;
+  return {
+    id: p.id as string,
+    role: p.role as string,
+    schoolId: p.schoolId as string,
+    schoolSlug: p.schoolSlug as string,
+  };
+}
+
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+// ─── New Multi-Role Auth Endpoints ───────────────────────────────────────────
+
+/**
+ * Create a school with initial admin credentials (Super Admin only)
+ * POST /api/auth/super-admin/create-school
+ */
+async function createSchoolEndpoint(req: Request, h: Headers): Promise<Response> {
+  const sa = await authSA(req);
+  if (!sa) return err("Unauthorized", 401, h);
+
+  const body = await req.json().catch(() => null);
+  if (!body?.name) return err("School name is required", 400, h);
+
+  try {
+    const result = await createSchoolWithAdmin(prisma, sa.id, body);
+    return json(
+      {
+        school: result.school,
+        admin: result.adminCredentials,
+        message: "School and admin credentials created successfully",
+      },
+      201,
+      h
+    );
+  } catch (error) {
+    return err(`Failed to create school: ${error instanceof Error ? error.message : "Unknown error"}`, 500, h);
+  }
+}
+
+/**
+ * Create a user (teacher, staff, student, parent)
+ * POST /api/auth/school/users/:role
+ */
+async function createSchoolUserEndpoint(
+  req: Request,
+  h: Headers,
+  role: "teacher" | "staff" | "student" | "parent"
+): Promise<Response> {
+  const auth = await authSchoolUser(req);
+  if (!auth) return err("Unauthorized", 401, h);
+
+  // Only admin can create users
+  if (auth.role !== "ADMIN") return err("Only admin can create users", 403, h);
+
+  const body = await req.json().catch(() => null);
+  if (!body) return err("Request body required", 400, h);
+
+  try {
+    const roleUpper = role.toUpperCase() as "TEACHER" | "STAFF" | "STUDENT" | "PARENT";
+    const result = await createUserByRole(prisma, auth.schoolId, roleUpper, body);
+
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        schoolId: auth.schoolId,
+        action: `user.${role}.created`,
+        entityType: "User",
+        entityId: result.user.id,
+        details: JSON.stringify({
+          email: result.user.email,
+          createdBy: auth.id,
+        }),
+      },
+    });
+
+    return json(
+      {
+        user: result.user,
+        credentials: result.credentials,
+        message: `${role} user created successfully`,
+      },
+      201,
+      h
+    );
+  } catch (error) {
+    return err(`Failed to create ${role}: ${error instanceof Error ? error.message : "Unknown error"}`, 500, h);
+  }
+}
+
+/**
+ * Bulk create users
+ * POST /api/auth/school/users/bulk/:role
+ */
+async function bulkCreateUsersEndpoint(
+  req: Request,
+  h: Headers,
+  role: "teacher" | "staff" | "student" | "parent"
+): Promise<Response> {
+  const auth = await authSchoolUser(req);
+  if (!auth) return err("Unauthorized", 401, h);
+
+  // Only admin can create users
+  if (auth.role !== "ADMIN") return err("Only admin can create users", 403, h);
+
+  const body = await req.json().catch(() => null);
+  if (!Array.isArray(body?.users)) return err("users array is required", 400, h);
+
+  try {
+    const roleUpper = role.toUpperCase() as "TEACHER" | "STAFF" | "STUDENT" | "PARENT";
+    const results = await createBulkUsers(prisma, auth.schoolId, roleUpper, body.users);
+
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        schoolId: auth.schoolId,
+        action: `users.${role}.bulk_created`,
+        entityType: "User",
+        entityId: "bulk",
+        details: JSON.stringify({
+          count: results.length,
+          createdBy: auth.id,
+        }),
+      },
+    });
+
+    return json(
+      {
+        created: results.length,
+        users: results,
+        message: `${results.length} ${role} users created successfully`,
+      },
+      201,
+      h
+    );
+  } catch (error) {
+    return err(`Failed to bulk create ${role}s: ${error instanceof Error ? error.message : "Unknown error"}`, 500, h);
+  }
+}
+
+/**
+ * Login for school users (teacher, staff, student, parent)
+ * POST /api/auth/school/login
+ * Body: { email, password, schoolSlug }
+ */
+async function loginSchoolUserEndpoint(req: Request, h: Headers): Promise<Response> {
+  const body = await req.json().catch(() => null);
+  if (!body?.email || !body?.password || !body?.schoolSlug) {
+    return err("Email, password, and schoolSlug are required", 400, h);
+  }
+
+  try {
+    const result = await loginSchoolUser(prisma, body.email, body.password, body.schoolSlug);
+
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        schoolId: result.user.schoolId,
+        action: `auth.${result.user.role.toLowerCase()}.login`,
+        entityType: "User",
+        entityId: result.user.id,
+      },
+    });
+
+    return json({ token: result.token, user: result.user }, 200, h);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Invalid credentials";
+    return err(msg, 401, h);
+  }
+}
+
+/**
+ * Get current user details
+ * GET /api/auth/school/me
+ */
+async function getSchoolUserEndpoint(req: Request, h: Headers): Promise<Response> {
+  const auth = await authSchoolUser(req);
+  if (!auth) return err("Unauthorized", 401, h);
+
+  try {
+    const user = await getCurrentUser(prisma, auth.id);
+    return json(user, 200, h);
+  } catch (error) {
+    return err(`Failed to get user: ${error instanceof Error ? error.message : "Unknown error"}`, 500, h);
+  }
+}
+
+/**
+ * Change password
+ * POST /api/auth/school/change-password
+ */
+async function changePasswordEndpoint(req: Request, h: Headers): Promise<Response> {
+  const auth = await authSchoolUser(req);
+  if (!auth) return err("Unauthorized", 401, h);
+
+  const body = await req.json().catch(() => null);
+  if (!body?.currentPassword || !body?.newPassword) {
+    return err("currentPassword and newPassword are required", 400, h);
+  }
+
+  try {
+    await updateUserPassword(prisma, auth.id, body.currentPassword, body.newPassword);
+
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        schoolId: auth.schoolId,
+        action: "auth.password_changed",
+        entityType: "User",
+        entityId: auth.id,
+      },
+    });
+
+    return json({ success: true, message: "Password updated successfully" }, 200, h);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Failed to update password";
+    return err(msg, 400, h);
+  }
+}
+
+/**
+ * Reset user password (Admin only)
+ * POST /api/auth/school/reset-password/:userId
+ */
+async function resetPasswordEndpoint(req: Request, h: Headers, userId: string): Promise<Response> {
+  const auth = await authSchoolUser(req);
+  if (!auth) return err("Unauthorized", 401, h);
+
+  // Only admin can reset passwords
+  if (auth.role !== "ADMIN") return err("Only admin can reset passwords", 403, h);
+
+  try {
+    const credentials = await resetUserPassword(prisma, userId);
+
+    // Verify user is in same school
+    const targetUser = await prisma.user.findUnique({ where: { id: userId }, select: { schoolId: true } });
+    if (!targetUser || targetUser.schoolId !== auth.schoolId) {
+      return err("User not found", 404, h);
+    }
+
+    // Create audit log
+    await prisma.auditLog.create({
+      data: {
+        schoolId: auth.schoolId,
+        action: "auth.password_reset",
+        entityType: "User",
+        entityId: userId,
+        details: JSON.stringify({ resetBy: auth.id }),
+      },
+    });
+
+    return json(
+      {
+        credentials,
+        message: "Password reset successfully. New temporary password sent.",
+      },
+      200,
+      h
+    );
+  } catch (error) {
+    return err(`Failed to reset password: ${error instanceof Error ? error.message : "Unknown error"}`, 500, h);
+  }
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -370,11 +645,77 @@ async function updateSchool(req: Request, h: Headers, id: string): Promise<Respo
   return json(result, 200, h);
 }
 
+/**
+ * Delete school with cascade deletion of all related data
+ * Automatically deletes: users, students, teachers, staff, parents, and all associated data
+ */
 async function deleteSchool(req: Request, h: Headers, id: string): Promise<Response> {
   const sa = await authSA(req);
   if (!sa) return err("Unauthorized", 401, h);
+
+  const school = await prisma.school.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      _count: {
+        select: {
+          users: true,
+          students: true,
+          staff: true,
+          academicYears: true,
+          exams: true,
+          notices: true,
+          auditLogs: true,
+        },
+      },
+    },
+  });
+
+  if (!school) return err("School not found", 404, h);
+
+  // Count related items before deletion
+  const deletionCounts = {
+    school: 1,
+    users: school._count.users,
+    students: school._count.students,
+    staff: school._count.staff,
+    academicYears: school._count.academicYears,
+    exams: school._count.exams,
+    notices: school._count.notices,
+    auditLogs: school._count.auditLogs,
+  };
+
+  // Delete school (cascade delete handles all relations)
   await prisma.school.delete({ where: { id } });
-  return json({ ok: true }, 200, h);
+
+  // Create audit log for super admin
+  await prisma.auditLog.create({
+    data: {
+      action: "school.deleted",
+      entityType: "School",
+      entityId: id,
+      metadata: {
+        schoolId: id,
+        schoolName: school.name,
+        deletedBy: sa.id,
+        deletionCounts,
+        timestamp: new Date().toISOString(),
+      },
+    },
+  }).catch(() => {
+    // Ignore if audit log fails
+  });
+
+  return json(
+    {
+      success: true,
+      message: `School "${school.name}" and all associated data have been permanently deleted`,
+      deletedCounts: deletionCounts,
+    },
+    200,
+    h
+  );
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -2619,8 +2960,36 @@ Bun.serve({
     if (p === "/api/super-admin/settings" && req.method === "PATCH") return updateSettings(req, h);
 
     // ── School Portal Auth ──────────────────────────────────────────────────
-    if (p === "/api/auth/school/login" && req.method === "POST") return loginSchool(req, h);
-    if (p === "/api/auth/school/me") return meSchool(req, h);
+    if (p === "/api/auth/super-admin/login" && req.method === "POST") return loginSuperAdmin(req, h);
+    if (p === "/api/auth/super-admin/me") return meSuperAdmin(req, h);
+
+    // School creation with admin
+    if (p === "/api/auth/super-admin/create-school" && req.method === "POST") return createSchoolEndpoint(req, h);
+
+    // School user login and management
+    if (p === "/api/auth/school/login" && req.method === "POST") {
+      return loginSchoolUserEndpoint(req, h);
+    }
+    if (p === "/api/auth/school/me") return getSchoolUserEndpoint(req, h);
+    if (p === "/api/auth/school/change-password" && req.method === "POST") return changePasswordEndpoint(req, h);
+
+    // Create users by role
+    const createUserMatch = p.match(/^\/api\/auth\/school\/users\/(teacher|staff|student|parent)$/);
+    if (createUserMatch && req.method === "POST") {
+      return createSchoolUserEndpoint(req, h, createUserMatch[1] as "teacher" | "staff" | "student" | "parent");
+    }
+
+    // Bulk create users
+    const bulkUserMatch = p.match(/^\/api\/auth\/school\/users\/bulk\/(teacher|staff|student|parent)$/);
+    if (bulkUserMatch && req.method === "POST") {
+      return bulkCreateUsersEndpoint(req, h, bulkUserMatch[1] as "teacher" | "staff" | "student" | "parent");
+    }
+
+    // Reset password (admin only)
+    const resetPassMatch = p.match(/^\/api\/auth\/school\/reset-password\/([^/]+)$/);
+    if (resetPassMatch && req.method === "POST") {
+      return resetPasswordEndpoint(req, h, resetPassMatch[1]);
+    }
 
     // ── Admin Portal ────────────────────────────────────────────────────────
     if (p === "/api/admin/dashboard") return adminDashboard(req, h);
