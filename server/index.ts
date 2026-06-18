@@ -4311,7 +4311,7 @@ async function deleteEcaActivity(req: Request, h: Headers, id: string): Promise<
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 Bun.serve({
-  port: parseInt(process.env.PORT ?? "4000"),
+  port: parseInt(process.env.PORT || "4000"),
   idleTimeout: 0,
 
   async fetch(req) {
