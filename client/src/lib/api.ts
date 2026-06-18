@@ -1,13 +1,10 @@
-// API base URL. In production set PUBLIC_API_URL at build time (Bun inlines
-// process.env.*). Falls back to same-origin "/api" proxy, then localhost in dev.
-// Guarded so a missing env never throws (the old VITE_API_URL crash).
+// API base URL. Bun inlines process.env.PUBLIC_API_URL at build time via
+// the define option in build.ts. Must be referenced directly (not via alias)
+// so Bun's define substitution matches the literal token.
 function resolveBase(): string {
-  try {
-    const env = (typeof process !== "undefined" ? (process as any).env : undefined) ?? {};
-    if (env.PUBLIC_API_URL) return String(env.PUBLIC_API_URL).replace(/\/$/, "");
-  } catch { /* ignore */ }
+  if (process.env.PUBLIC_API_URL) return String(process.env.PUBLIC_API_URL).replace(/\/$/, "");
   if (typeof window !== "undefined" && window.location?.hostname && window.location.hostname !== "localhost") {
-    return ""; // same-origin: API served behind the same host (paths already start with /api)
+    return ""; // same-origin fallback
   }
   return "http://localhost:4000";
 }
