@@ -27,19 +27,28 @@ const result = await Bun.build({
   },
 });
 
-// Find the entry chunk and patch index.html to reference it.
-const entry = result.outputs.find((o) => o.kind === "entry-point");
+// Find the entry JS and CSS outputs, then patch index.html to reference them.
+const entry = result.outputs.find((o) => o.kind === "entry-point" && o.path.endsWith(".js"));
+const css = result.outputs.find((o) => o.path.endsWith(".css"));
 if (!entry) throw new Error("Build failed: no entry-point output found");
 
 const entryFile = path.relative(outdir, entry.path);
+const cssFile = css ? path.relative(outdir, css.path) : null;
+
 const srcHtml = await Bun.file("src/index.html").text();
-const distHtml = srcHtml.replace(
+let distHtml = srcHtml.replace(
   /<script[^>]*src="[^"]*frontend\.tsx"[^>]*><\/script>/,
   `<script type="module" crossorigin src="./${entryFile}"></script>`
 );
+if (cssFile) {
+  distHtml = distHtml.replace(
+    "</head>",
+    `  <link rel="stylesheet" crossorigin href="./${cssFile}">\n</head>`
+  );
+}
 await Bun.write(path.join(outdir, "index.html"), distHtml);
 
 for (const output of result.outputs) {
   console.log(` ${path.relative(process.cwd(), output.path)}  ${(output.size / 1024).toFixed(1)} KB`);
 }
-console.log(` dist/index.html  (entry: ${entryFile})`);
+console.log(` dist/index.html  (entry: ${entryFile}, css: ${cssFile ?? "none"})`);
