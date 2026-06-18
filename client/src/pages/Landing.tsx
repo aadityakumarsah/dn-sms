@@ -58,11 +58,8 @@ export default function Landing() {
             to="/login"
             className="bg-blue-600 text-white font-semibold px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
           >
-            Get Started Free <ArrowRight className="w-4 h-4" />
+            Get Started <ArrowRight className="w-4 h-4" />
           </Link>
-          <a href="#features" className="border border-gray-200 text-gray-700 font-semibold px-6 py-3 rounded-lg hover:bg-gray-50 transition-colors">
-            See Features
-          </a>
         </div>
       </section>
 

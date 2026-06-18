@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, Menu, X, ChevronDown, Bell, Search } from "lucide-react";
+import { LogOut, Menu, X, ChevronDown, Bell, Search, Lock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { PORTAL_CONFIGS, APP_NAME } from "@/lib/constants";
 import { cn } from "@/lib/utils";
@@ -68,24 +68,57 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
     ? navItems
     : [{ section: "", items: navItems as NavItem[] }];
 
-  const dynamicSections = sections.map((section) => ({
-    ...section,
-    items: section.items.map((item) => {
-      if (item.label === "Schools" && schoolsCount !== undefined) {
-        return { ...item, badge: schoolsCount };
-      }
-      if (item.label === "Announcements" && announcementsCount !== undefined) {
-        return { ...item, badge: announcementsCount };
-      }
-      return item;
-    }),
-  }));
+  // Gate nav items by the school's plan features. Items whose feature is not in
+  // the plan are shown LOCKED (red "upgrade" mark) rather than hidden — unless
+  // the plan exposes no features at all (e.g. super-admin), where all are open.
+  const enabled = user.features ?? [];
+  const planGated = user.role !== "super_admin" && enabled.length > 0;
+  const isLocked = (key?: string) => planGated && !!key && !enabled.includes(key);
+  const upgradeHint = user.planName ? `Not in your ${user.planName} plan — upgrade to unlock` : "Upgrade your plan to unlock";
+
+  const dynamicSections = sections
+    .map((section) => ({
+      ...section,
+      items: section.items
+        .map((item) => {
+          const locked = isLocked(item.feature);
+          const decorated: NavItem = locked ? { ...item, locked: true, lockLabel: upgradeHint } : { ...item };
+          if (item.label === "Schools" && schoolsCount !== undefined) {
+            return { ...decorated, badge: schoolsCount };
+          }
+          if (item.label === "Announcements" && announcementsCount !== undefined) {
+            return { ...decorated, badge: announcementsCount };
+          }
+          return decorated;
+        }),
+    }))
+    .filter((section) => section.items.length > 0);
 
   const renderNavItem = (item: NavItem) => {
     const Icon = item.icon;
     const active = isActive(item.href);
     const expanded = expandedItems.includes(item.label);
     const badgeVariant = item.badgeVariant ?? "default";
+
+    // Locked (higher-tier) item: visible but non-navigating, with a red upgrade mark.
+    if (item.locked) {
+      return (
+        <div
+          key={item.href}
+          title={item.lockLabel ?? "Upgrade your plan to unlock"}
+          className={cn(
+            "flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium mb-0.5 cursor-not-allowed select-none",
+            isDark ? "text-white/30" : "text-gray-400"
+          )}
+        >
+          <Icon className="w-4 h-4 shrink-0 opacity-60" />
+          <span className="flex-1 truncate">{item.label}</span>
+          <span className={cn("flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold", BADGE_COLORS.danger)}>
+            <Lock className="w-2.5 h-2.5" /> Upgrade
+          </span>
+        </div>
+      );
+    }
 
     if (item.children?.length) {
       return (

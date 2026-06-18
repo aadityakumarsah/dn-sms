@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Search, X, RefreshCw, Users, Trash2 } from "lucide-react";
+import { Plus, Search, X, RefreshCw, Users, Trash2, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import EditDrawer from "./_EditDrawer";
 
 // Non-teaching staff designations.
 const DESIGNATIONS = ["Accountant", "Librarian", "Cleaner", "Security Guard", "Receptionist", "Lab Assistant", "Office Assistant", "Driver", "Helper", "Cook", "Gardener", "IT Support", "Nurse", "Store Keeper"];
@@ -90,6 +91,7 @@ export default function StaffMgmt() {
   const [designation, setDesignation] = useState("");
   const [modal, setModal] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [editUserId, setEditUserId] = useState<string | null>(null);
 
   useEffect(() => { const t = setTimeout(() => setDebouncedSearch(search), 350); return () => clearTimeout(t); }, [search]);
 
@@ -148,8 +150,12 @@ export default function StaffMgmt() {
                   <td className="px-5 py-3 text-sm text-gray-400">{t.phone ?? "—"}</td>
                   <td className="px-5 py-3 text-xs text-gray-400 font-mono">{t.employeeId ?? "—"}</td>
                   <td className="px-5 py-3">
-                    <button onClick={(e) => { e.stopPropagation(); setDeleteId(t.id); }}
-                      className="text-xs px-2.5 py-1 border border-rose-100 rounded-lg text-rose-500 hover:bg-rose-50 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-3 h-3" /></button>
+                    <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={(e) => { e.stopPropagation(); setEditUserId(t.userId); }} title="Edit & password"
+                        className="text-xs px-2.5 py-1 border border-blue-100 rounded-lg text-blue-600 hover:bg-blue-50"><Pencil className="w-3 h-3" /></button>
+                      <button onClick={(e) => { e.stopPropagation(); setDeleteId(t.id); }} title="Remove"
+                        className="text-xs px-2.5 py-1 border border-rose-100 rounded-lg text-rose-500 hover:bg-rose-50"><Trash2 className="w-3 h-3" /></button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -166,14 +172,18 @@ export default function StaffMgmt() {
             <p className="text-sm text-gray-500 mb-5">This will remove the staff member from the school.</p>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setDeleteId(null)} className="px-4 py-2 text-sm text-gray-500">Cancel</button>
-              <button onClick={async () => { await api.admin.deleteStaff(deleteId!); setDeleteId(null); load(); }}
+              <button onClick={async () => { try { await api.admin.deleteStaff(deleteId!); setDeleteId(null); } finally { load(); } }}
                 className="px-4 py-2 text-sm bg-rose-600 text-white rounded-xl hover:bg-rose-700 font-medium">Remove</button>
             </div>
           </div>
         </div>
       )}
 
-      <StaffModal open={modal} onClose={() => setModal(false)} onSave={async (d) => { await api.admin.createStaff(d); load(); }} />
+      <StaffModal open={modal} onClose={() => setModal(false)} onSave={async (d) => { try { await api.admin.createStaff(d); } finally { load(); } }} />
+
+      {editUserId && (
+        <EditDrawer userId={editUserId} onClose={() => setEditUserId(null)} onSaved={() => { setEditUserId(null); load(); }} />
+      )}
     </>
   );
 }

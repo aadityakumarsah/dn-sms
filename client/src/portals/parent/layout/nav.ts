@@ -1,4 +1,4 @@
-import { LayoutDashboard, CalendarCheck, FileText, DollarSign, Megaphone, MessageSquare, Settings } from "lucide-react";
+import { LayoutDashboard, CalendarCheck, FileText, DollarSign, Megaphone, MessageSquare, Settings, CalendarRange } from "lucide-react";
 import type { NavSection } from "@/types";
 
 export const parentNav: NavSection[] = [
@@ -11,6 +11,7 @@ export const parentNav: NavSection[] = [
   {
     section: "Child's Progress",
     items: [
+      { label: "Class Routine", href: "/parent/routine", icon: CalendarRange },
       { label: "Attendance", href: "/parent/attendance", icon: CalendarCheck },
       { label: "Results", href: "/parent/results", icon: FileText },
     ],

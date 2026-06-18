@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Plus, X, RefreshCw, GraduationCap, ChevronRight, ArrowRight,
-  Edit3, Trash2, CheckCircle, Calendar, Users, BookOpen, MoreVertical,
+  Edit3, Trash2, CheckCircle, Calendar, Users, BookOpen,
   AlertTriangle, ChevronDown, ChevronUp, TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { fmtBS } from "@/lib/nepali-date";
+import { NepaliDateInput } from "@/components/common/NepaliDateInput";
+import { PortalMenu } from "@/components/common/PortalMenu";
 
 // ─── Year Modal (create + edit) ───────────────────────────────────────────────
 
@@ -29,7 +32,8 @@ function YearModal({ open, onClose, onSave, initial }: {
           isActive: initial.isActive ?? false,
         });
       } else {
-        setForm({ name: "", startDate: "", endDate: "", isActive: true });
+        const today = new Date().toISOString().slice(0, 10);
+        setForm({ name: "", startDate: today, endDate: today, isActive: true });
       }
       setError("");
     }
@@ -66,16 +70,14 @@ function YearModal({ open, onClose, onSave, initial }: {
               ))}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Start Date <span className="text-rose-400">*</span></label>
-              <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">Start Date (BS) <span className="text-rose-400">*</span></label>
+              <NepaliDateInput value={form.startDate} onChange={(v) => setForm({ ...form, startDate: v })} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">End Date <span className="text-rose-400">*</span></label>
-              <input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">End Date (BS) <span className="text-rose-400">*</span></label>
+              <NepaliDateInput value={form.endDate} onChange={(v) => setForm({ ...form, endDate: v })} />
             </div>
           </div>
           <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -343,16 +345,12 @@ function YearCard({ year, onEdit, onDelete, onSetActive, activating }: {
   year: any; onEdit: () => void; onDelete: () => void;
   onSetActive: () => void; activating: boolean;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const close = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
-
-  const fmt = (d: string) => new Date(d).toLocaleDateString("en-NP", { year: "numeric", month: "short", day: "numeric" });
+  const fmt = (d: string) => fmtBS(d, true);
+  const menuItems = [
+    ...(!year.isActive ? [{ label: "Set as Current", icon: <CheckCircle className="w-3.5 h-3.5" />, onClick: onSetActive, disabled: activating }] : []),
+    { label: "Edit", icon: <Edit3 className="w-3.5 h-3.5" />, onClick: onEdit },
+    { label: "Delete", icon: <Trash2 className="w-3.5 h-3.5" />, onClick: onDelete, variant: "danger" as const },
+  ];
 
   return (
     <div className={cn("px-5 py-4 flex items-center justify-between hover:bg-gray-50/50 transition-colors", year.isActive && "bg-emerald-50/30")}>
@@ -376,30 +374,7 @@ function YearCard({ year, onEdit, onDelete, onSetActive, activating }: {
           <span className="flex items-center gap-1"><BookOpen className="w-3.5 h-3.5" />{year._count?.grades ?? 0} grades</span>
           <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" />{year._count?.enrollments ?? 0} enrolled</span>
         </div>
-
-        <div className="relative" ref={menuRef}>
-          <button onClick={() => setMenuOpen((o) => !o)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
-            <MoreVertical className="w-4 h-4" />
-          </button>
-          {menuOpen && (
-            <div className="absolute right-0 top-8 z-20 bg-white border border-gray-100 rounded-xl shadow-lg py-1 min-w-[160px]">
-              {!year.isActive && (
-                <button onClick={() => { setMenuOpen(false); onSetActive(); }} disabled={activating}
-                  className="w-full text-left px-3 py-2 text-sm text-emerald-600 hover:bg-gray-50 flex items-center gap-2">
-                  <CheckCircle className="w-3.5 h-3.5" /> Set as Current
-                </button>
-              )}
-              <button onClick={() => { setMenuOpen(false); onEdit(); }}
-                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                <Edit3 className="w-3.5 h-3.5" /> Edit
-              </button>
-              <button onClick={() => { setMenuOpen(false); onDelete(); }}
-                className="w-full text-left px-3 py-2 text-sm text-rose-500 hover:bg-rose-50 flex items-center gap-2">
-                <Trash2 className="w-3.5 h-3.5" /> Delete
-              </button>
-            </div>
-          )}
-        </div>
+        <PortalMenu items={menuItems} />
       </div>
     </div>
   );

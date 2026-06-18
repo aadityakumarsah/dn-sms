@@ -77,7 +77,7 @@ function StudentModal({ open, onClose, initial, sections, busRoutes, onSave }: {
   open: boolean; onClose: () => void; initial?: any;
   sections: any[]; busRoutes: any[]; onSave: (d: any) => Promise<void>;
 }) {
-  const blank = { firstName: "", lastName: "", email: "", phone: "", gender: "MALE", dateOfBirth: "", address: "", admissionNo: "", sectionId: "", rollNo: "", transportMode: "WALKING", busRouteId: "", avatar: "", class10Marks: "", entranceMarks: "", stream: "", password: "", parentEmail: "", parentFirstName: "", parentLastName: "", parentPhone: "", parentOccupation: "", parentRelationship: "FATHER", parentPassword: "" };
+  const blank = { firstName: "", lastName: "", email: "", phone: "", gender: "MALE", dateOfBirth: "", address: "", admissionNo: "", sectionId: "", rollNo: "", transportMode: "WALKING", busRouteId: "", avatar: "", class10Marks: "", entranceMarks: "", stream: "", password: "", feeAmount: "", feeRemarks: "", tuitionFee: "", busFee: "", otherFee: "", parentEmail: "", parentFirstName: "", parentLastName: "", parentPhone: "", parentOccupation: "", parentRelationship: "FATHER", parentPassword: "" };
   const [form, setForm] = useState<any>(blank);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -92,6 +92,11 @@ function StudentModal({ open, onClose, initial, sections, busRoutes, onSave }: {
         admissionNo: initial.admissionNo ?? "", sectionId: initial.sectionId ?? "", rollNo: initial.rollNo ?? "",
         transportMode: initial.transportMode ?? "WALKING", busRouteId: initial.busRouteId ?? "",
         avatar: initial.avatar ?? "", class10Marks: initial.class10Marks ?? "", entranceMarks: initial.entranceMarks ?? "", stream: initial.stream ?? "",
+        tuitionFee: initial.tuitionFee != null ? String(initial.tuitionFee) : "",
+        busFee: initial.busFee != null ? String(initial.busFee) : "",
+        otherFee: initial.otherFee != null ? String(initial.otherFee) : "",
+        feeAmount: "", feeRemarks: "", password: "",
+        parentEmail: "", parentFirstName: "", parentLastName: "", parentPhone: "", parentOccupation: "", parentRelationship: "FATHER", parentPassword: "",
       });
     } else {
       setForm(blank);
@@ -262,6 +267,44 @@ function StudentModal({ open, onClose, initial, sections, busRoutes, onSave }: {
                 </select>
                 {busRoutes.length === 0 && <p className="text-xs text-amber-600 mt-1.5">No bus routes yet. Add buses & routes under Transport first.</p>}
                 {selectedRoute && <p className="text-[11px] text-gray-400 mt-1.5">A bus fee of Rs {selectedRoute.fee} will be added to this student's fees.</p>}
+              </div>
+            )}
+          </div>
+
+          {/* Fees */}
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-xs font-semibold text-gray-700 mb-1">Fee Configuration</p>
+            <p className="text-[11px] text-gray-400 mb-3">Set custom fees for this student. Total is auto-calculated.</p>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">Tuition Fee (NPR)</label>
+                <input type="number" min={0} value={form.tuitionFee} onChange={(e) => setForm({ ...form, tuitionFee: e.target.value })} placeholder="e.g. 8000" className={field} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">Bus Fee (NPR)</label>
+                <input type="number" min={0} value={form.busFee} onChange={(e) => setForm({ ...form, busFee: e.target.value })} placeholder="0" className={field} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">Other Fees (NPR)</label>
+                <input type="number" min={0} value={form.otherFee} onChange={(e) => setForm({ ...form, otherFee: e.target.value })} placeholder="0" className={field} />
+              </div>
+            </div>
+            {(Number(form.tuitionFee) || Number(form.busFee) || Number(form.otherFee)) ? (
+              <div className="mt-2 px-3 py-2 bg-blue-50 rounded-xl flex justify-between text-xs">
+                <span className="text-gray-500">Total Fee</span>
+                <span className="font-bold text-blue-700">NPR {(Number(form.tuitionFee || 0) + Number(form.busFee || 0) + Number(form.otherFee || 0)).toLocaleString()}</span>
+              </div>
+            ) : null}
+            {!initial && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">One-time charge now (NPR) <span className="text-gray-400 font-normal">optional</span></label>
+                  <input type="number" min={0} value={form.feeAmount} onChange={(e) => setForm({ ...form, feeAmount: e.target.value })} placeholder="Immediate fee collection" className={field} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Note</label>
+                  <input value={form.feeRemarks} onChange={(e) => setForm({ ...form, feeRemarks: e.target.value })} placeholder="e.g. Admission fee" className={field} />
+                </div>
               </div>
             )}
           </div>
@@ -496,7 +539,7 @@ export default function Students() {
             <p className="text-sm text-gray-500 mb-5">This will permanently remove the student and all their records. This cannot be undone.</p>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setDeleteId(null)} className="px-4 py-2 text-sm text-gray-500">Cancel</button>
-              <button onClick={async () => { await api.admin.deleteStudent(deleteId!); setDeleteId(null); reload(); }}
+              <button onClick={async () => { try { await api.admin.deleteStudent(deleteId!); setDeleteId(null); } finally { reload(); } }}
                 className="px-4 py-2 text-sm bg-rose-600 text-white rounded-xl hover:bg-rose-700 font-medium">Remove</button>
             </div>
           </div>
@@ -506,19 +549,22 @@ export default function Students() {
       <StudentModal open={modal} onClose={() => { setModal(false); setEditStudent(null); }} initial={editStudent}
         sections={sections} busRoutes={busRoutes}
         onSave={async (d) => {
-          if (editStudent) {
-            await api.admin.updateStudent(editStudent.id, d);
-          } else {
-            const result = await api.admin.createStudent(d);
-            if (result?.credentials) {
-              setCreatedCreds({
-                ...result.credentials,
-                admissionNo: result.admissionNo,
-                parentCredentials: result.parentCredentials ?? null,
-              });
+          try {
+            if (editStudent) {
+              await api.admin.updateStudent(editStudent.id, d);
+            } else {
+              const result = await api.admin.createStudent(d);
+              if (result?.credentials) {
+                setCreatedCreds({
+                  ...result.credentials,
+                  admissionNo: result.admissionNo,
+                  parentCredentials: result.parentCredentials ?? null,
+                });
+              }
             }
+          } finally {
+            reload();
           }
-          reload();
         }} />
 
       <CredentialsModal open={!!createdCreds} onClose={() => setCreatedCreds(null)} creds={createdCreds} role="student" />

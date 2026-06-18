@@ -23,6 +23,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(options.headers as any ?? {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
+  // Sliding session: server sends a fresh 30d token when the current one is > 1 day old
+  const refreshed = res.headers.get("X-Refresh-Token");
+  if (refreshed) localStorage.setItem("dn_sms_token", refreshed);
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: "Request failed" }));
     throw new Error(body.error ?? `HTTP ${res.status}`);
@@ -31,6 +34,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  // Public, unauthenticated — school directory + branded login
+  public: {
+    schools: (search?: string) => {
+      const q = new URLSearchParams();
+      if (search) q.set("search", search);
+      return request<{ schools: any[] }>(`/api/public/schools?${q}`);
+    },
+    school: (slug: string) => request<{ school: any }>(`/api/public/schools/${slug}`),
+  },
+
   auth: {
     // Super Admin Auth
     loginSuperAdmin: (email: string, password: string) =>
@@ -239,6 +252,18 @@ export const api = {
     feeTypes: () => request<any[]>("/api/admin/fee-types"),
     createFeeType: (data: Record<string, unknown>) => request<any>("/api/admin/fee-types", { method: "POST", body: JSON.stringify(data) }),
 
+    // Fee Structures / Installment plans
+    feeStructures: (p?: { level?: string | number; stream?: string; category?: string }) => {
+      const q = new URLSearchParams();
+      if (p?.level !== undefined && p.level !== "") q.set("level", String(p.level));
+      if (p?.stream) q.set("stream", p.stream);
+      if (p?.category) q.set("category", p.category);
+      return request<any[]>(`/api/admin/fee-structures?${q}`);
+    },
+    createFeeStructure: (data: Record<string, unknown>) => request<any>("/api/admin/fee-structures", { method: "POST", body: JSON.stringify(data) }),
+    updateFeeStructure: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/fee-structures/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteFeeStructure: (id: string) => request<any>(`/api/admin/fee-structures/${id}`, { method: "DELETE" }),
+
     // Notices
     notices: () => request<any[]>("/api/admin/notices"),
     createNotice: (data: Record<string, unknown>) => request<any>("/api/admin/notices", { method: "POST", body: JSON.stringify(data) }),
@@ -251,6 +276,8 @@ export const api = {
     updateExam: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/exams/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     upsertExamSubject: (examId: string, data: Record<string, unknown>) => request<any>(`/api/admin/exams/${examId}/subjects`, { method: "POST", body: JSON.stringify(data) }),
     deleteExamSubject: (id: string) => request<any>(`/api/admin/exam-subjects/${id}`, { method: "DELETE" }),
+    deleteExam: (id: string) => request<any>(`/api/admin/exams/${id}`, { method: "DELETE" }),
+    markAdmissionFee: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/admissions/${id}/fee-payment`, { method: "PATCH", body: JSON.stringify(data) }),
 
     // Subjects
     subjects: () => request<any[]>("/api/admin/subjects"),
@@ -288,6 +315,104 @@ export const api = {
     updateAdmission: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/admissions/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     enrollAdmission: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/admissions/${id}/enroll`, { method: "POST", body: JSON.stringify(data) }),
     deleteAdmission: (id: string) => request<any>(`/api/admin/admissions/${id}`, { method: "DELETE" }),
+
+    // Notifications
+    notifications: () => request<any[]>("/api/admin/notifications"),
+    createNotification: (data: Record<string, unknown>) => request<any>("/api/admin/notifications", { method: "POST", body: JSON.stringify(data) }),
+    deleteNotification: (id: string) => request<any>(`/api/admin/notifications/${id}`, { method: "DELETE" }),
+
+    // Routine (Timetable)
+    routine: () => request<any[]>("/api/admin/routine"),
+    createRoutineSlot: (data: Record<string, unknown>) => request<any>("/api/admin/routine", { method: "POST", body: JSON.stringify(data) }),
+    deleteRoutineSlot: (id: string) => request<any>(`/api/admin/routine/${id}`, { method: "DELETE" }),
+
+    // Homework
+    homework: () => request<any[]>("/api/admin/homework"),
+    createHomework: (data: Record<string, unknown>) => request<any>("/api/admin/homework", { method: "POST", body: JSON.stringify(data) }),
+    deleteHomework: (id: string) => request<any>(`/api/admin/homework/${id}`, { method: "DELETE" }),
+
+    // Chat
+    chatUsers: () => request<any[]>("/api/admin/chat/users"),
+    chatMessages: (withUser?: string) => request<any[]>(`/api/admin/chat/messages${withUser ? `?with=${withUser}` : ""}`),
+    sendMessage: (data: { recipientId: string; content: string }) => request<any>("/api/admin/chat/messages", { method: "POST", body: JSON.stringify(data) }),
+
+    // Inventory
+    inventory: () => request<any[]>("/api/admin/inventory"),
+    createInventory: (data: Record<string, unknown>) => request<any>("/api/admin/inventory", { method: "POST", body: JSON.stringify(data) }),
+    updateInventory: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/inventory/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteInventory: (id: string) => request<any>(`/api/admin/inventory/${id}`, { method: "DELETE" }),
+
+    // Payroll (staff)
+    payroll: (params?: { staffId?: string }) => request<any[]>(`/api/admin/payroll${params?.staffId ? `?staffId=${params.staffId}` : ""}`),
+    createPayroll: (data: Record<string, unknown>) => request<any>("/api/admin/payroll", { method: "POST", body: JSON.stringify(data) }),
+    updatePayroll: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/payroll/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deletePayroll: (id: string) => request<any>(`/api/admin/payroll/${id}`, { method: "DELETE" }),
+    // Payroll (teacher)
+    teacherPayroll: (params?: { teacherId?: string }) => request<any[]>(`/api/admin/teacher-payroll${params?.teacherId ? `?teacherId=${params.teacherId}` : ""}`),
+    createTeacherPayroll: (data: Record<string, unknown>) => request<any>("/api/admin/teacher-payroll", { method: "POST", body: JSON.stringify(data) }),
+    updateTeacherPayroll: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/teacher-payroll/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteTeacherPayroll: (id: string) => request<any>(`/api/admin/teacher-payroll/${id}`, { method: "DELETE" }),
+
+    // Leave Notes
+    leaves: () => request<any[]>("/api/admin/leaves"),
+    createLeave: (data: Record<string, unknown>) => request<any>("/api/admin/leaves", { method: "POST", body: JSON.stringify(data) }),
+    updateLeave: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/leaves/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteLeave: (id: string) => request<any>(`/api/admin/leaves/${id}`, { method: "DELETE" }),
+
+    // Teacher Evaluation
+    teacherEvaluations: () => request<any[]>("/api/admin/teacher-evaluations"),
+    createTeacherEvaluation: (data: Record<string, unknown>) => request<any>("/api/admin/teacher-evaluations", { method: "POST", body: JSON.stringify(data) }),
+    deleteTeacherEvaluation: (id: string) => request<any>(`/api/admin/teacher-evaluations/${id}`, { method: "DELETE" }),
+
+    // Student Assessment (CAS)
+    assessments: (studentId?: string) => request<any[]>(`/api/admin/assessments${studentId ? `?studentId=${studentId}` : ""}`),
+    createAssessment: (data: Record<string, unknown>) => request<any>("/api/admin/assessments", { method: "POST", body: JSON.stringify(data) }),
+    deleteAssessment: (id: string) => request<any>(`/api/admin/assessments/${id}`, { method: "DELETE" }),
+
+    // Documents
+    documents: () => request<any[]>("/api/admin/documents"),
+    createDocument: (data: Record<string, unknown>) => request<any>("/api/admin/documents", { method: "POST", body: JSON.stringify(data) }),
+    deleteDocument: (id: string) => request<any>(`/api/admin/documents/${id}`, { method: "DELETE" }),
+
+    // Canteen
+    canteen: () => request<any[]>("/api/admin/canteen"),
+    createCanteenItem: (data: Record<string, unknown>) => request<any>("/api/admin/canteen", { method: "POST", body: JSON.stringify(data) }),
+    updateCanteenItem: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/canteen/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteCanteenItem: (id: string) => request<any>(`/api/admin/canteen/${id}`, { method: "DELETE" }),
+
+    // Support Tickets
+    support: () => request<any[]>("/api/admin/support"),
+    createSupportTicket: (data: Record<string, unknown>) => request<any>("/api/admin/support", { method: "POST", body: JSON.stringify(data) }),
+    updateSupportTicket: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/support/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteSupportTicket: (id: string) => request<any>(`/api/admin/support/${id}`, { method: "DELETE" }),
+
+    // Surveys
+    surveys: () => request<any[]>("/api/admin/surveys"),
+    createSurvey: (data: Record<string, unknown>) => request<any>("/api/admin/surveys", { method: "POST", body: JSON.stringify(data) }),
+    updateSurvey: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/surveys/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteSurvey: (id: string) => request<any>(`/api/admin/surveys/${id}`, { method: "DELETE" }),
+
+    // Infirmary
+    infirmary: () => request<any[]>("/api/admin/infirmary"),
+    createInfirmaryVisit: (data: Record<string, unknown>) => request<any>("/api/admin/infirmary", { method: "POST", body: JSON.stringify(data) }),
+    deleteInfirmaryVisit: (id: string) => request<any>(`/api/admin/infirmary/${id}`, { method: "DELETE" }),
+
+    // User Management
+    schoolUsers: (p?: { role?: string; search?: string }) => {
+      const q = new URLSearchParams();
+      if (p?.role) q.set("role", p.role);
+      if (p?.search) q.set("search", p.search);
+      return request<any[]>(`/api/admin/users?${q}`);
+    },
+    schoolUser: (id: string) => request<any>(`/api/admin/users/${id}`),
+    updateSchoolUser: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    setUserPassword: (userId: string, password: string) => request<any>(`/api/admin/users/${userId}/set-password`, { method: "POST", body: JSON.stringify({ password }) }),
+
+    // ECA
+    eca: () => request<any[]>("/api/admin/eca"),
+    createEcaActivity: (data: Record<string, unknown>) => request<any>("/api/admin/eca", { method: "POST", body: JSON.stringify(data) }),
+    updateEcaActivity: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/eca/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    deleteEcaActivity: (id: string) => request<any>(`/api/admin/eca/${id}`, { method: "DELETE" }),
   },
 
   teacher: {
@@ -303,6 +428,8 @@ export const api = {
     },
     markAttendance: (data: Record<string, unknown>) => request<any>("/api/teacher/attendance/mark", { method: "POST", body: JSON.stringify(data) }),
     notices: () => request<any[]>("/api/teacher/notices"),
+    routine: () => request<any[]>("/api/teacher/routine"),
+    exams: () => request<any[]>("/api/teacher/exams"),
   },
 
   student: {
@@ -312,6 +439,8 @@ export const api = {
     fees: () => request<any[]>("/api/student/fees"),
     notices: () => request<any[]>("/api/student/notices"),
     subjects: () => request<any[]>("/api/student/subjects"),
+    routine: () => request<any[]>("/api/student/routine"),
+    exams: () => request<any[]>("/api/student/exams"),
   },
 
   parent: {
@@ -320,5 +449,6 @@ export const api = {
     results: () => request<any[]>("/api/parent/results"),
     fees: () => request<any[]>("/api/parent/fees"),
     attendance: () => request<any[]>("/api/parent/attendance"),
+    routine: (childId: string) => request<any[]>(`/api/parent/routine?childId=${childId}`),
   },
 };

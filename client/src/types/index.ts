@@ -14,6 +14,10 @@ export interface User {
   avatar?: string;
   schoolId?: string; // null for super_admin
   schoolName?: string;
+  features?: string[]; // plan feature keys enabled for this school
+  planSlug?: string | null; // e.g. free | basic | pro | enterprise
+  planName?: string | null; // human label of the school's plan
+  schoolStatus?: string; // ACTIVE | TRIAL | SUSPENDED | PAUSED | INACTIVE
 }
 
 export interface School {
@@ -37,6 +41,9 @@ export interface NavItem {
   badge?: string | number;
   badgeVariant?: "default" | "danger" | "warning";
   children?: Omit<NavItem, "children">[];
+  feature?: string; // plan feature key gating this item (undefined = always visible)
+  locked?: boolean; // computed at render: feature not in the school's plan
+  lockLabel?: string; // computed at render: upgrade hint shown on locked items
 }
 
 export interface NavSection {
