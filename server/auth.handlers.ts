@@ -17,13 +17,16 @@ import {
   type UserCredential,
 } from "./auth.utils.ts";
 
+if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET must be set in production — refusing to start with the insecure dev fallback.");
+}
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? "dev-secret");
 
 export async function signToken(payload: Record<string, unknown>): Promise<string> {
   return new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime("7d")
+    .setExpirationTime("30d")
     .sign(JWT_SECRET);
 }
 
@@ -279,12 +282,16 @@ export async function loginSchoolUser(
     schoolName: string;
     schoolSlug: string;
     status: string;
+    features: string[];
+    planSlug: string | null;
+    planName: string | null;
+    schoolStatus: string;
   };
 }> {
   // Find school by slug
   const school = await prisma.school.findUnique({
     where: { slug: schoolSlug },
-    select: { id: true, name: true, slug: true },
+    select: { id: true, name: true, slug: true, status: true, subscription: { select: { plan: { select: { slug: true, name: true, features: true } } } } },
   });
   if (!school) throw new Error("School not found");
 
@@ -312,7 +319,7 @@ export async function loginSchoolUser(
   const token = await signToken({
     id: user.id,
     email: user.email,
-    role: user.role,
+    role: user.role.toLowerCase(),
     schoolId: school.id,
     schoolSlug: school.slug,
   });
@@ -327,11 +334,15 @@ export async function loginSchoolUser(
       id: user.id,
       email: user.email,
       name: fullName,
-      role: user.role,
+      role: user.role.toLowerCase(),
       schoolId: school.id,
       schoolName: school.name,
       schoolSlug: school.slug,
       status: user.status,
+      features: normalizeFeatures(school.subscription?.plan?.features ?? []),
+      planSlug: school.subscription?.plan?.slug ?? null,
+      planName: school.subscription?.plan?.name ?? null,
+      schoolStatus: school.status,
     },
   };
 }
@@ -390,6 +401,34 @@ export async function resetUserPassword(
   };
 }
 
+// Canonical feature keys (mirror of client ALL_FEATURES). Old plans may store
+// human labels instead of keys, so we normalize both ways.
+const FEATURE_LABEL_TO_KEY: Record<string, string> = {
+  "student and staff management": "student_staff_mgmt",
+  "notifications": "notifications",
+  "calendar and routine": "calendar_routine",
+  "homework management": "homework_mgmt",
+  "exams and ledger": "exams_ledger",
+  "attendance and leave notes": "attendance_leave",
+  "reading materials and course plan": "reading_course_plan",
+  "online class and staff meeting": "online_class",
+  "billing and finance": "billing_finance",
+  "teacher evaluation and analytics": "teacher_evaluation",
+  "student evaluation cas & record": "student_evaluation",
+  "library management": "library_mgmt",
+  "document management": "document_mgmt",
+  "lunch & canteen": "lunch_canteen",
+  "dedicated support": "dedicated_support",
+  "chat system": "chat_system",
+  "inventory, payroll & survey": "inventory_payroll",
+  "infirmary & sca logo": "infirmary_sca",
+  "mobile app (school's branding)": "mobile_app",
+};
+
+function normalizeFeatures(raw: string[]): string[] {
+  return raw.map((f) => FEATURE_LABEL_TO_KEY[f.toLowerCase()] ?? f);
+}
+
 /**
  * ─── Get Current User Details ─────────────────────────────────────────
  */
@@ -406,12 +445,21 @@ export async function getCurrentUser(
   schoolSlug: string;
   status: string;
   lastLoginAt: Date | null;
+  features: string[];
+  planSlug: string | null;
+  planName: string | null;
+  schoolStatus: string;
 }> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: {
       profile: true,
-      school: { select: { id: true, name: true, slug: true } },
+      school: {
+        select: {
+          id: true, name: true, slug: true, status: true,
+          subscription: { select: { plan: { select: { slug: true, name: true, features: true } } } },
+        },
+      },
     },
   });
   if (!user) throw new Error("User not found");
@@ -420,15 +468,21 @@ export async function getCurrentUser(
     ? `${user.profile.firstName} ${user.profile.lastName}`.trim()
     : user.email.split("@")[0];
 
+  const rawFeatures = user.school.subscription?.plan?.features ?? [];
+
   return {
     id: user.id,
     email: user.email,
     name: fullName,
-    role: user.role,
+    role: user.role.toLowerCase(),
     schoolId: user.school.id,
     schoolName: user.school.name,
     schoolSlug: user.school.slug,
     status: user.status,
     lastLoginAt: user.lastLoginAt,
+    features: normalizeFeatures(rawFeatures),
+    planSlug: user.school.subscription?.plan?.slug ?? null,
+    planName: user.school.subscription?.plan?.name ?? null,
+    schoolStatus: user.school.status,
   };
 }

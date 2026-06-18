@@ -14,8 +14,12 @@ const result = await Bun.build({
   minify: true,
   target: "browser",
   sourcemap: "linked",
+  // Split lazy() route imports into separate chunks so the initial load only
+  // ships the entry pages; each portal's pages load on demand.
+  splitting: true,
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
+    "process.env.PUBLIC_API_URL": JSON.stringify(process.env.PUBLIC_API_URL ?? ""),
   },
 });
 

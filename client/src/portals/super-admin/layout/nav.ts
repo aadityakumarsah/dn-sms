@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, School, Users, CreditCard, BarChart2,
-  Megaphone, Settings, Activity, Globe, ShieldCheck
+  Megaphone, Settings, Globe, ShieldCheck
 } from "lucide-react";
 import type { NavSection } from "@/types";
 
@@ -10,7 +10,6 @@ export const superAdminNav: NavSection[] = [
     items: [
       { label: "Dashboard", href: "/super-admin", icon: LayoutDashboard },
       { label: "Analytics", href: "/super-admin/analytics", icon: BarChart2 },
-      { label: "Activity", href: "/super-admin/activity", icon: Activity },
     ],
   },
   {

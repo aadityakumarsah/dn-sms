@@ -195,6 +195,9 @@ export default function Exams() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSugg, setShowSugg] = useState(false);
 
   const load = () => { setLoading(true); api.admin.exams().then((d) => setExams(Array.isArray(d) ? d : [])).finally(() => setLoading(false)); };
   useEffect(() => { load(); }, []);
@@ -202,9 +205,25 @@ export default function Exams() {
   const toggle = (id: string) => setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const handleStatusChange = async (id: string, status: string) => {
-    await api.admin.updateExam(id, { status });
-    load();
+    try { await api.admin.updateExam(id, { status }); } finally { load(); }
   };
+
+  const handleDelete = async (exam: any) => {
+    if (!confirm(`Delete "${exam.name}"? This cannot be undone.`)) return;
+    try { await api.admin.deleteExam(exam.id); } finally { load(); }
+  };
+
+  const handleSearchChange = (v: string) => {
+    setSearch(v);
+    if (v.trim().length >= 2) {
+      const q = v.toLowerCase();
+      const sugg = Array.from(new Set(exams.flatMap((e) => [e.name, e.type.replace(/_/g, " ")]).filter((s) => s.toLowerCase().includes(q)))).slice(0, 5);
+      setSuggestions(sugg);
+      setShowSugg(sugg.length > 0);
+    } else { setShowSugg(false); }
+  };
+
+  const filtered = search.trim() ? exams.filter((e) => e.name.toLowerCase().includes(search.toLowerCase()) || e.type.toLowerCase().includes(search.toLowerCase())) : exams;
 
   return (
     <>
@@ -224,18 +243,41 @@ export default function Exams() {
           </div>
         </div>
 
+        {/* Search bar with suggestions */}
+        <div className="relative max-w-sm">
+          <input value={search} onChange={(e) => handleSearchChange(e.target.value)}
+            onFocus={() => search.trim().length >= 2 && setShowSugg(suggestions.length > 0)}
+            onBlur={() => setTimeout(() => setShowSugg(false), 150)}
+            placeholder="Search exams…"
+            className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400 bg-white" />
+          <X className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300", search ? "hidden" : "")} />
+          {search && <button onClick={() => { setSearch(""); setShowSugg(false); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"><X className="w-3.5 h-3.5" /></button>}
+          {!search && <Plus className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300 rotate-45" style={{ display: "none" }} />}
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="11" cy="11" r="7" strokeWidth="2"/><path d="M21 21l-4.35-4.35" strokeWidth="2" strokeLinecap="round"/></svg>
+          {showSugg && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 overflow-hidden">
+              {suggestions.map((s) => (
+                <button key={s} onMouseDown={() => { setSearch(s); setShowSugg(false); }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700">
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         {loading ? (
           <div className="space-y-3">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="bg-white rounded-2xl border border-gray-100 p-5 h-32 animate-pulse" />)}</div>
-        ) : exams.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="text-center py-14 bg-white rounded-2xl border border-gray-100">
             <Calendar className="w-8 h-8 text-gray-200 mx-auto mb-3" />
-            <p className="text-sm text-gray-400">No exams scheduled. <button onClick={() => setModal(true)} className="text-blue-600">Schedule one →</button></p>
+            <p className="text-sm text-gray-400">{search ? `No exams matching "${search}"` : "No exams scheduled."} {!search && <button onClick={() => setModal(true)} className="text-blue-600">Schedule one →</button>}</p>
           </div>
         ) : (
           <div className="space-y-3">
-            {exams.map((exam) => {
-              const cfg = STATUS_CONFIG[exam.status] ?? STATUS_CONFIG.SCHEDULED;
-              const Icon = cfg.icon;
+            {filtered.map((exam) => {
+              const cfg = STATUS_CONFIG[exam.status] ?? STATUS_CONFIG.SCHEDULED!;
+              const Icon = cfg!.icon;
               const isExpanded = expanded.has(exam.id);
               return (
                 <div key={exam.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
@@ -260,13 +302,16 @@ export default function Exams() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <span className={cn("flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg font-medium", cfg.color)}>
-                          <Icon className="w-3 h-3" />{cfg.label}
+                        <span className={cn("flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg font-medium", cfg!.color)}>
+                          <Icon className="w-3 h-3" />{cfg!.label}
                         </span>
                         <select value={exam.status} onChange={(e) => handleStatusChange(exam.id, e.target.value)}
                           className="text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-blue-400 bg-white">
-                          {Object.keys(STATUS_CONFIG).map((s) => <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>)}
+                          {Object.keys(STATUS_CONFIG).map((s) => <option key={s} value={s}>{STATUS_CONFIG[s]!.label}</option>)}
                         </select>
+                        <button onClick={() => handleDelete(exam)} className="p-1.5 text-gray-300 hover:text-rose-500 rounded-lg transition-colors" title="Delete exam">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   </div>

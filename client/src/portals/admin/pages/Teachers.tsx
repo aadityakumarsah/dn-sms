@@ -157,16 +157,16 @@ function FormField({ label, k, type = "text", placeholder = "", form, setForm }:
 }
 
 function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClose: () => void; initial?: any; onSave: (d: any) => Promise<void> }) {
-  const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "", password: "" });
+  const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "", password: "", salary: "", allowances: "0", deductions: "0" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (initial) {
       const parts = (initial.name ?? "").split(" ");
-      setForm({ firstName: parts[0] ?? "", lastName: parts.slice(1).join(" "), email: initial.email ?? "", phone: initial.phone ?? "", gender: initial.gender ?? "MALE", qualification: initial.qualification ?? "", specialization: initial.specialization ?? "", experience: String(initial.experience ?? ""), joinDate: initial.joinDate ? initial.joinDate.slice(0, 10) : "", employeeId: initial.employeeId ?? "", avatar: initial.avatar ?? "", password: "" });
+      setForm({ firstName: parts[0] ?? "", lastName: parts.slice(1).join(" "), email: initial.email ?? "", phone: initial.phone ?? "", gender: initial.gender ?? "MALE", qualification: initial.qualification ?? "", specialization: initial.specialization ?? "", experience: String(initial.experience ?? ""), joinDate: initial.joinDate ? initial.joinDate.slice(0, 10) : "", employeeId: initial.employeeId ?? "", avatar: initial.avatar ?? "", password: "", salary: initial.salary != null ? String(initial.salary) : "", allowances: String(initial.allowances ?? 0), deductions: String(initial.deductions ?? 0) });
     } else {
-      setForm({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "", password: "" });
+      setForm({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "", password: "", salary: "", allowances: "0", deductions: "0" });
     }
     setError("");
   }, [initial, open]);
@@ -232,6 +232,14 @@ function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClo
             <FormField label="Employee ID" k="employeeId" placeholder="EMP-001" form={form} setForm={setForm} />
           </div>
           <FormField label="Join Date" k="joinDate" type="date" form={form} setForm={setForm} />
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-xs font-semibold text-gray-700 mb-3">Salary Configuration</p>
+            <div className="grid grid-cols-3 gap-3">
+              <FormField label="Monthly Salary (NPR)" k="salary" type="number" placeholder="0" form={form} setForm={setForm} />
+              <FormField label="Allowances" k="allowances" type="number" placeholder="0" form={form} setForm={setForm} />
+              <FormField label="Deductions" k="deductions" type="number" placeholder="0" form={form} setForm={setForm} />
+            </div>
+          </div>
         </div>
         <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl sticky bottom-0">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500">Cancel</button>

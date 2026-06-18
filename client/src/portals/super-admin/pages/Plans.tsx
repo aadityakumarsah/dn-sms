@@ -1,19 +1,76 @@
 import { useState, useEffect } from "react";
 import {
   Plus, Edit3, Trash2, Check, X, RefreshCw, CreditCard,
-  TrendingUp, Users, Zap, Star, Building2, CheckCircle2
+  TrendingUp, Users, Zap, Star, Building2, CheckCircle2, Loader2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 
-// ─── Plan Modal ───────────────────────────────────────────────────────────────
+// ─── Feature definitions ───────────────────────────────────────────────────────
 
-const FEATURE_PRESETS: Record<string, string[]> = {
-  free:       ["Basic attendance tracking", "Fee collection", "Notices board", "Up to 50 students"],
-  basic:      ["Everything in Free", "Exam management", "Reports export", "SMS notifications", "Up to 200 students"],
-  pro:        ["Everything in Basic", "Payroll management", "Inventory tracking", "Analytics dashboard", "Custom branding", "Up to 1000 students"],
-  enterprise: ["Everything in Pro", "Unlimited students & teachers", "Dedicated support", "API access", "Custom domain", "Priority onboarding"],
+export const ALL_FEATURES: { key: string; label: string; category: string }[] = [
+  { key: "student_staff_mgmt",    label: "Student and Staff Management",   category: "Core" },
+  { key: "notifications",         label: "Notifications",                  category: "Core" },
+  { key: "calendar_routine",      label: "Calendar and Routine",           category: "Core" },
+  { key: "homework_mgmt",         label: "Homework Management",            category: "Academics" },
+  { key: "exams_ledger",          label: "Exams and Ledger",               category: "Academics" },
+  { key: "attendance_leave",      label: "Attendance and Leave Notes",     category: "Academics" },
+  { key: "reading_course_plan",   label: "Reading Materials and Course Plan", category: "Academics" },
+  { key: "online_class",          label: "Online Class and Staff Meeting", category: "Academics" },
+  { key: "billing_finance",       label: "Billing and Finance",            category: "Finance" },
+  { key: "teacher_evaluation",    label: "Teacher Evaluation and Analytics", category: "Analytics" },
+  { key: "student_evaluation",    label: "Student Evaluation CAS & Record", category: "Analytics" },
+  { key: "library_mgmt",          label: "Library Management",             category: "Operations" },
+  { key: "document_mgmt",         label: "Document Management",            category: "Operations" },
+  { key: "lunch_canteen",         label: "Lunch & Canteen",                category: "Operations" },
+  { key: "dedicated_support",     label: "Dedicated Support",              category: "Support" },
+  { key: "chat_system",           label: "Chat System",                    category: "Communication" },
+  { key: "inventory_payroll",     label: "Inventory, Payroll & Survey",    category: "Operations" },
+  { key: "infirmary_sca",         label: "Infirmary & SCA Logo",           category: "Operations" },
+  { key: "mobile_app",            label: "Mobile App (School's Branding)", category: "Premium" },
+];
+
+const PLAN_COLORS = [
+  { bg: "bg-gray-100",    text: "text-gray-600",   border: "border-gray-200",   badge: "bg-gray-500",    accent: "bg-gray-500"    },
+  { bg: "bg-sky-50",      text: "text-sky-700",    border: "border-sky-200",    badge: "bg-sky-500",     accent: "bg-sky-500"     },
+  { bg: "bg-blue-50",     text: "text-blue-700",   border: "border-blue-200",   badge: "bg-blue-600",    accent: "bg-blue-600"    },
+  { bg: "bg-purple-50",   text: "text-purple-700", border: "border-purple-200", badge: "bg-purple-600",  accent: "bg-purple-600"  },
+  { bg: "bg-indigo-50",   text: "text-indigo-700", border: "border-indigo-200", badge: "bg-indigo-600",  accent: "bg-indigo-600"  },
+];
+const PLAN_ICONS = [Zap, Star, TrendingUp, Building2, CheckCircle2];
+
+// Map old free-text labels to their canonical keys (one-way migration on load)
+const LABEL_TO_KEY = Object.fromEntries(ALL_FEATURES.map((f) => [f.label.toLowerCase(), f.key]));
+
+function normalizePlanFeatures(plan: any): any {
+  const raw: string[] = plan.features ?? [];
+  const normalized = raw.map((f) => LABEL_TO_KEY[f.toLowerCase()] ?? f);
+  return { ...plan, features: normalized };
+}
+
+const PAYMENT_STATUS_BADGE: Record<string, string> = {
+  PAID: "bg-emerald-50 text-emerald-700", PENDING: "bg-amber-50 text-amber-700",
+  FAILED: "bg-rose-50 text-rose-600", OVERDUE: "bg-rose-50 text-rose-700", REFUNDED: "bg-gray-100 text-gray-500",
 };
+
+// ─── Toggle switch ─────────────────────────────────────────────────────────────
+
+function Toggle({ on, onChange, loading }: { on: boolean; onChange: () => void; loading?: boolean }) {
+  return (
+    <button
+      onClick={onChange}
+      disabled={loading}
+      className={cn("w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-50 overflow-hidden", on ? "bg-emerald-500" : "bg-gray-200")}
+    >
+      {loading
+        ? <Loader2 className="absolute inset-0 m-auto w-3 h-3 animate-spin text-white" />
+        : <span className={cn("absolute top-0.5 left-0 w-4 h-4 bg-white rounded-full shadow transition-transform", on ? "translate-x-[18px]" : "translate-x-0.5")} />
+      }
+    </button>
+  );
+}
+
+// ─── Plan Modal (create / edit) ────────────────────────────────────────────────
 
 function PlanModal({ open, onClose, initial, onSave }: {
   open: boolean; onClose: () => void; initial: any | null;
@@ -27,17 +84,16 @@ function PlanModal({ open, onClose, initial, onSave }: {
   const [maxTeachers, setMaxTeachers] = useState("-1");
   const [maxStorageMB, setMaxStorageMB] = useState("-1");
   const [features, setFeatures] = useState<string[]>([]);
-  const [newFeature, setNewFeature] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!open) return;
     if (initial) {
       setName(initial.name ?? ""); setSlug(initial.slug ?? "");
       setPrice(String(initial.price ?? "")); setAnnualPrice(initial.annualPrice ? String(initial.annualPrice) : "");
-      setMaxStudents(String(initial.maxStudents ?? -1));
-      setMaxTeachers(String(initial.maxTeachers ?? -1));
+      setMaxStudents(String(initial.maxStudents ?? -1)); setMaxTeachers(String(initial.maxTeachers ?? -1));
       setMaxStorageMB(String(initial.maxStorageMB ?? -1));
       setFeatures(initial.features ?? []); setIsActive(initial.isActive ?? true);
     } else {
@@ -50,22 +106,25 @@ function PlanModal({ open, onClose, initial, onSave }: {
 
   const autoSlug = (n: string) => n.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
+  const toggleFeature = (key: string) =>
+    setFeatures((f) => f.includes(key) ? f.filter((k) => k !== key) : [...f, key]);
+
   const handleSave = async () => {
     if (!name || !slug || price === "") { setError("Name, slug, and price are required"); return; }
     setSaving(true); setError(null);
     try {
-      await onSave({
-        name, slug, price: parseFloat(price),
-        annualPrice: annualPrice ? parseFloat(annualPrice) : null,
+      await onSave({ name, slug, price: parseFloat(price), annualPrice: annualPrice ? parseFloat(annualPrice) : null,
         maxStudents: parseInt(maxStudents), maxTeachers: parseInt(maxTeachers),
-        maxStorageMB: parseInt(maxStorageMB), features, isActive,
-      });
+        maxStorageMB: parseInt(maxStorageMB), features, isActive });
       onClose();
     } catch (e: any) { setError(e.message); }
     finally { setSaving(false); }
   };
 
   if (!open) return null;
+
+  const categories = [...new Set(ALL_FEATURES.map((f) => f.category))];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
@@ -74,17 +133,17 @@ function PlanModal({ open, onClose, initial, onSave }: {
           <h2 className="text-base font-bold text-gray-900">{initial ? "Edit Plan" : "Create New Plan"}</h2>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-5">
           {error && <div className="p-3 bg-rose-50 text-rose-600 text-sm rounded-xl">{error}</div>}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">Plan Name <span className="text-rose-500">*</span></label>
               <input value={name} onChange={(e) => { setName(e.target.value); if (!initial) setSlug(autoSlug(e.target.value)); }}
-                placeholder="e.g. Pro" className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400" />
+                placeholder="e.g. Veda Plus" className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400" />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">Slug <span className="text-rose-500">*</span></label>
-              <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="e.g. pro"
+              <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="e.g. veda-plus"
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400 font-mono" />
             </div>
           </div>
@@ -101,11 +160,7 @@ function PlanModal({ open, onClose, initial, onSave }: {
             </div>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            {[
-              { label: "Max Students", val: maxStudents, set: setMaxStudents },
-              { label: "Max Teachers", val: maxTeachers, set: setMaxTeachers },
-              { label: "Storage (MB)", val: maxStorageMB, set: setMaxStorageMB },
-            ].map(({ label, val, set }) => (
+            {[{ label: "Max Students", val: maxStudents, set: setMaxStudents }, { label: "Max Teachers", val: maxTeachers, set: setMaxTeachers }, { label: "Storage (MB)", val: maxStorageMB, set: setMaxStorageMB }].map(({ label, val, set }) => (
               <div key={label}>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">{label}</label>
                 <input type="number" value={val} onChange={(e) => set(e.target.value)}
@@ -114,43 +169,36 @@ function PlanModal({ open, onClose, initial, onSave }: {
               </div>
             ))}
           </div>
-          {!initial && (
-            <div>
-              <p className="text-xs text-gray-400 mb-2">Quick-fill features:</p>
-              <div className="flex gap-2 flex-wrap">
-                {Object.keys(FEATURE_PRESETS).map((k) => (
-                  <button key={k} onClick={() => setFeatures(FEATURE_PRESETS[k])}
-                    className="text-xs px-3 py-1 bg-gray-100 text-gray-600 rounded-lg hover:bg-purple-50 hover:text-purple-700 capitalize transition-colors">{k}</button>
-                ))}
+
+          {/* Feature toggles grouped by category */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-medium text-gray-600">Features</label>
+              <div className="flex gap-2">
+                <button onClick={() => setFeatures(ALL_FEATURES.map((f) => f.key))} className="text-xs text-purple-600 hover:underline">Select all</button>
+                <span className="text-gray-300">·</span>
+                <button onClick={() => setFeatures([])} className="text-xs text-gray-400 hover:underline">Clear</button>
               </div>
             </div>
-          )}
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1.5">Features</label>
-            <div className="space-y-1.5 mb-2 max-h-40 overflow-y-auto">
-              {features.map((f, i) => (
-                <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-1.5">
-                  <Check className="w-3 h-3 text-emerald-500 shrink-0" />
-                  <span className="text-sm text-gray-700 flex-1">{f}</span>
-                  <button onClick={() => setFeatures(features.filter((_, j) => j !== i))} className="text-gray-300 hover:text-rose-500"><X className="w-3 h-3" /></button>
+            <div className="border border-gray-100 rounded-xl overflow-hidden divide-y divide-gray-50">
+              {categories.map((cat) => (
+                <div key={cat}>
+                  <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 bg-gray-50">{cat}</p>
+                  {ALL_FEATURES.filter((f) => f.category === cat).map((feat) => (
+                    <label key={feat.key} className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer">
+                      <input type="checkbox" checked={features.includes(feat.key)} onChange={() => toggleFeature(feat.key)}
+                        className="w-4 h-4 accent-purple-600 rounded" />
+                      <span className="text-sm text-gray-700">{feat.label}</span>
+                    </label>
+                  ))}
                 </div>
               ))}
             </div>
-            <div className="flex gap-2">
-              <input value={newFeature} onChange={(e) => setNewFeature(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && newFeature.trim()) { setFeatures([...features, newFeature.trim()]); setNewFeature(""); } }}
-                placeholder="Add feature and press Enter..."
-                className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-400" />
-              <button onClick={() => { if (newFeature.trim()) { setFeatures([...features, newFeature.trim()]); setNewFeature(""); } }}
-                className="px-3 py-2 bg-purple-600 text-white rounded-xl hover:bg-purple-700"><Plus className="w-4 h-4" /></button>
-            </div>
           </div>
+
           {initial && (
             <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
-              <button onClick={() => setIsActive(!isActive)}
-                className={cn("w-10 h-5 rounded-full transition-colors relative", isActive ? "bg-purple-500" : "bg-gray-200")}>
-                <span className={cn("absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform", isActive ? "translate-x-5" : "translate-x-0.5")} />
-              </button>
+              <Toggle on={isActive} onChange={() => setIsActive(!isActive)} />
               <span className="text-sm text-gray-700">Plan is {isActive ? "active" : "inactive"}</span>
             </div>
           )}
@@ -158,8 +206,9 @@ function PlanModal({ open, onClose, initial, onSave }: {
         <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl sticky bottom-0">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">Cancel</button>
           <button onClick={handleSave} disabled={saving}
-            className="px-5 py-2 text-sm bg-purple-600 text-white rounded-xl hover:bg-purple-700 disabled:opacity-50 font-medium">
-            {saving ? "Saving..." : initial ? "Update Plan" : "Create Plan"}
+            className="px-5 py-2 text-sm bg-purple-600 text-white rounded-xl hover:bg-purple-700 disabled:opacity-50 font-medium flex items-center gap-2">
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            {initial ? "Update Plan" : "Create Plan"}
           </button>
         </div>
       </div>
@@ -241,18 +290,96 @@ function PaymentModal({ open, onClose, schools, onSave }: {
   );
 }
 
+// ─── Feature comparison table ─────────────────────────────────────────────────
+
+function FeatureMatrix({ plans, onToggle, toggling }: {
+  plans: any[];
+  onToggle: (planId: string, featureKey: string, newFeatures: string[]) => Promise<void>;
+  toggling: string; // "planId:featureKey"
+}) {
+  const categories = [...new Set(ALL_FEATURES.map((f) => f.category))];
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr>
+              <th className="text-left px-5 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-orange-50 border-b border-orange-100 min-w-[220px]">
+                Features
+              </th>
+              {plans.map((plan, i) => {
+                const color = PLAN_COLORS[i % PLAN_COLORS.length];
+                return (
+                  <th key={plan.id} className={cn("px-4 py-4 text-center border-b min-w-[120px]", color.bg, `border-${color.border}`)}>
+                    <p className={cn("text-xs font-bold uppercase tracking-wide", color.text)}>{plan.name}</p>
+                    <p className="text-xs text-gray-500 font-normal mt-0.5">
+                      {Number(plan.price) === 0 ? "Free" : `NPR ${Number(plan.price).toLocaleString()}/mo`}
+                    </p>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {categories.map((cat) => (
+              <>
+                <tr key={`cat-${cat}`} className="bg-orange-50/60">
+                  <td colSpan={plans.length + 1} className="px-5 py-2 text-[10px] font-semibold uppercase tracking-widest text-orange-500">
+                    {cat}
+                  </td>
+                </tr>
+                {ALL_FEATURES.filter((f) => f.category === cat).map((feat, fi) => (
+                  <tr key={feat.key} className={cn("border-t border-gray-50", fi % 2 === 0 ? "bg-white" : "bg-gray-50/40")}>
+                    <td className="px-5 py-3 text-sm text-gray-700">{feat.label}</td>
+                    {plans.map((plan) => {
+                      const enabled = (plan.features ?? []).includes(feat.key);
+                      const isToggling = toggling === `${plan.id}:${feat.key}`;
+                      return (
+                        <td key={plan.id} className="px-4 py-3 text-center">
+                          <div className="flex justify-center">
+                            <Toggle
+                              on={enabled}
+                              loading={isToggling}
+                              onChange={async () => {
+                                const newFeatures = enabled
+                                  ? (plan.features ?? []).filter((k: string) => k !== feat.key)
+                                  : [...(plan.features ?? []), feat.key];
+                                await onToggle(plan.id, feat.key, newFeatures);
+                              }}
+                            />
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </>
+            ))}
+          </tbody>
+          {/* Footer with Select Plan buttons */}
+          <tfoot>
+            <tr className="border-t-2 border-gray-100">
+              <td className="px-5 py-4 text-xs text-gray-400 font-medium">Select the plan that fits you</td>
+              {plans.map((plan, i) => {
+                const color = PLAN_COLORS[i % PLAN_COLORS.length];
+                return (
+                  <td key={plan.id} className="px-4 py-4 text-center">
+                    <span className={cn("inline-block text-xs font-medium px-3 py-1.5 rounded-lg border", color.border, color.text, color.bg)}>
+                      {plan.name}
+                    </span>
+                  </td>
+                );
+              })}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
-
-const PLAN_COLORS = ["bg-gray-300", "bg-sky-400", "bg-blue-500", "bg-purple-500", "bg-indigo-500"];
-const PLAN_ICONS = [Zap, Star, TrendingUp, Building2, CheckCircle2];
-
-const PAYMENT_STATUS_BADGE: Record<string, string> = {
-  PAID: "bg-emerald-50 text-emerald-700",
-  PENDING: "bg-amber-50 text-amber-700",
-  FAILED: "bg-rose-50 text-rose-600",
-  OVERDUE: "bg-rose-50 text-rose-700",
-  REFUNDED: "bg-gray-100 text-gray-500",
-};
 
 export default function Plans() {
   const [tab, setTab] = useState<"plans" | "payments">("plans");
@@ -264,10 +391,11 @@ export default function Plans() {
   const [planModal, setPlanModal] = useState(false);
   const [editPlan, setEditPlan] = useState<any | null>(null);
   const [payModal, setPayModal] = useState(false);
+  const [toggling, setToggling] = useState(""); // "planId:featureKey"
 
   const loadPlans = () => {
     setLoading(true);
-    api.superAdmin.plans().then(setPlans).finally(() => setLoading(false));
+    api.superAdmin.plans().then((ps) => setPlans(ps.map(normalizePlanFeatures))).finally(() => setLoading(false));
   };
   const loadPayments = () => {
     setLoading(true);
@@ -281,6 +409,20 @@ export default function Plans() {
   }, []);
 
   useEffect(() => { if (tab === "payments") loadPayments(); }, [tab, page]);
+
+  const handleToggleFeature = async (planId: string, featureKey: string, newFeatures: string[]) => {
+    setToggling(`${planId}:${featureKey}`);
+    // Optimistic update
+    setPlans((prev) => prev.map((p) => p.id === planId ? { ...p, features: newFeatures } : p));
+    try {
+      await api.superAdmin.updatePlan(planId, { features: newFeatures });
+    } catch {
+      // Rollback
+      loadPlans();
+    } finally {
+      setToggling("");
+    }
+  };
 
   const totalMRR = plans.reduce((s, p) => s + (Number(p.price) * (p._count?.subscriptions ?? 0)), 0);
 
@@ -345,79 +487,94 @@ export default function Plans() {
           ))}
         </div>
 
-        {/* Plans Grid */}
         {tab === "plans" && (
-          <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
-            {loading ? Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="bg-white rounded-2xl border border-gray-100 p-5 h-72 animate-pulse">
-                <div className="w-8 h-8 bg-gray-100 rounded-xl mb-4" /><div className="h-4 bg-gray-100 rounded w-3/4 mb-3" />
-                <div className="h-7 bg-gray-100 rounded w-1/2" />
-              </div>
-            )) : plans.map((plan, i) => {
-              const Icon = PLAN_ICONS[i % PLAN_ICONS.length];
-              const subCount = plan._count?.subscriptions ?? 0;
-              return (
-                <div key={plan.id} className={cn("bg-white rounded-2xl border-2 p-5 flex flex-col gap-4 hover:shadow-md transition-shadow",
-                  plan.slug === "pro" ? "border-blue-200" : plan.slug === "enterprise" ? "border-purple-200" : "border-gray-100")}>
-                  <div className="flex items-start justify-between">
-                    <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center text-white", PLAN_COLORS[i % PLAN_COLORS.length])}>
-                      <Icon className="w-4 h-4" />
-                    </div>
-                    <div className="flex gap-1">
-                      <button onClick={() => { setEditPlan(plan); setPlanModal(true); }}
-                        className="p-1.5 text-gray-300 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"><Edit3 className="w-3.5 h-3.5" /></button>
-                      <button onClick={async () => {
-                        if (!confirm(`Delete ${plan.name}?`)) return;
-                        await api.superAdmin.deletePlan(plan.id).catch((e: any) => alert(e.message));
-                        loadPlans();
-                      }} className="p-1.5 text-gray-300 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-bold text-gray-900 text-base">{plan.name}</h3>
-                      {!plan.isActive && <span className="text-xs bg-gray-100 text-gray-400 px-2 py-0.5 rounded-full">Inactive</span>}
-                    </div>
-                    <p className="text-2xl font-bold text-gray-900 mt-1">
-                      {Number(plan.price) === 0 ? "Free" : `NPR ${Number(plan.price).toLocaleString()}`}
-                      {Number(plan.price) > 0 && <span className="text-sm font-normal text-gray-400">/mo</span>}
-                    </p>
-                    {plan.annualPrice && <p className="text-xs text-emerald-600 mt-0.5">NPR {Number(plan.annualPrice).toLocaleString()}/yr</p>}
-                  </div>
-                  <div className="flex-1 space-y-1.5">
-                    {(plan.features ?? []).slice(0, 5).map((f: string, fi: number) => (
-                      <div key={fi} className="flex items-center gap-2">
-                        <Check className="w-3 h-3 text-emerald-500 shrink-0" />
-                        <span className="text-xs text-gray-600">{f}</span>
-                      </div>
-                    ))}
-                    {(plan.features ?? []).length > 5 && <p className="text-xs text-gray-400">+{plan.features.length - 5} more</p>}
-                  </div>
-                  <div className="border-t border-gray-100 pt-3 flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <Users className="w-3.5 h-3.5 text-gray-400" />
-                      <span className="text-xs font-semibold text-gray-700">{subCount} school{subCount !== 1 ? "s" : ""}</span>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400">MRR</p>
-                      <p className="text-xs font-bold text-emerald-600">NPR {(Number(plan.price) * subCount).toLocaleString()}</p>
-                    </div>
-                  </div>
-                  <div className="bg-gray-50 rounded-xl p-3 space-y-1">
-                    {[
-                      { label: "Students", val: plan.maxStudents },
-                      { label: "Teachers", val: plan.maxTeachers },
-                      { label: "Storage", val: plan.maxStorageMB, suffix: " MB" },
-                    ].map(({ label, val, suffix = "" }) => (
-                      <div key={label} className="flex justify-between text-xs">
-                        <span className="text-gray-400">{label}</span>
-                        <span className="font-medium text-gray-700">{val === -1 ? "Unlimited" : `${val}${suffix}`}</span>
-                      </div>
-                    ))}
-                  </div>
+          <div className="space-y-6">
+            {/* Plan cards */}
+            <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+              {loading ? Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="bg-white rounded-2xl border border-gray-100 p-5 h-60 animate-pulse">
+                  <div className="w-8 h-8 bg-gray-100 rounded-xl mb-4" />
+                  <div className="h-4 bg-gray-100 rounded w-3/4 mb-3" />
+                  <div className="h-7 bg-gray-100 rounded w-1/2" />
                 </div>
-              );
-            })}
+              )) : plans.map((plan, i) => {
+                const Icon = PLAN_ICONS[i % PLAN_ICONS.length];
+                const color = PLAN_COLORS[i % PLAN_COLORS.length];
+                const subCount = plan._count?.subscriptions ?? 0;
+                const enabledCount = (plan.features ?? []).length;
+                return (
+                  <div key={plan.id} className={cn("bg-white rounded-2xl border-2 p-5 flex flex-col gap-4 hover:shadow-md transition-shadow", color.border)}>
+                    <div className="flex items-start justify-between">
+                      <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center text-white", color.badge)}>
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => { setEditPlan(plan); setPlanModal(true); }}
+                          className="p-1.5 text-gray-300 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors">
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={async () => {
+                          if (!confirm(`Delete ${plan.name}?`)) return;
+                          await api.superAdmin.deletePlan(plan.id).catch((e: any) => alert(e.message));
+                          loadPlans();
+                        }} className="p-1.5 text-gray-300 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-bold text-gray-900 text-base">{plan.name}</h3>
+                        {!plan.isActive && <span className="text-xs bg-gray-100 text-gray-400 px-2 py-0.5 rounded-full">Inactive</span>}
+                      </div>
+                      <p className="text-2xl font-bold text-gray-900 mt-1">
+                        {Number(plan.price) === 0 ? "Free" : `NPR ${Number(plan.price).toLocaleString()}`}
+                        {Number(plan.price) > 0 && <span className="text-sm font-normal text-gray-400">/mo</span>}
+                      </p>
+                      {plan.annualPrice && <p className="text-xs text-emerald-600 mt-0.5">NPR {Number(plan.annualPrice).toLocaleString()}/yr</p>}
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-xs text-gray-400 mb-2">{enabledCount} of {ALL_FEATURES.length} features enabled</p>
+                      <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div className={cn("h-full rounded-full", color.accent)} style={{ width: `${Math.round((enabledCount / ALL_FEATURES.length) * 100)}%` }} />
+                      </div>
+                      <div className="mt-3 space-y-1">
+                        {ALL_FEATURES.filter((f) => (plan.features ?? []).includes(f.key)).slice(0, 4).map((f) => (
+                          <div key={f.key} className="flex items-center gap-2">
+                            <Check className="w-3 h-3 text-emerald-500 shrink-0" />
+                            <span className="text-xs text-gray-600 truncate">{f.label}</span>
+                          </div>
+                        ))}
+                        {enabledCount > 4 && <p className="text-xs text-gray-400 pl-5">+{enabledCount - 4} more features</p>}
+                      </div>
+                    </div>
+                    <div className="border-t border-gray-100 pt-3 flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5 text-gray-400" />
+                        <span className="text-xs font-semibold text-gray-700">{subCount} school{subCount !== 1 ? "s" : ""}</span>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-gray-400">MRR</p>
+                        <p className="text-xs font-bold text-emerald-600">NPR {(Number(plan.price) * subCount).toLocaleString()}</p>
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 rounded-xl p-3 space-y-1">
+                      {[{ label: "Students", val: plan.maxStudents }, { label: "Teachers", val: plan.maxTeachers }, { label: "Storage", val: plan.maxStorageMB, suffix: " MB" }].map(({ label, val, suffix = "" }) => (
+                        <div key={label} className="flex justify-between text-xs">
+                          <span className="text-gray-400">{label}</span>
+                          <span className="font-medium text-gray-700">{val === -1 ? "Unlimited" : `${val}${suffix}`}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Feature comparison table */}
+            {!loading && plans.length > 0 && (
+              <FeatureMatrix plans={plans} onToggle={handleToggleFeature} toggling={toggling} />
+            )}
           </div>
         )}
 
@@ -476,8 +633,15 @@ export default function Plans() {
         )}
       </div>
 
-      <PlanModal open={planModal} onClose={() => { setPlanModal(false); setEditPlan(null); }}
-        initial={editPlan} onSave={editPlan ? async (d) => { await api.superAdmin.updatePlan(editPlan.id, d); loadPlans(); } : async (d) => { await api.superAdmin.createPlan(d); loadPlans(); }} />
+      <PlanModal
+        open={planModal}
+        onClose={() => { setPlanModal(false); setEditPlan(null); }}
+        initial={editPlan}
+        onSave={editPlan
+          ? async (d) => { await api.superAdmin.updatePlan(editPlan.id, d); loadPlans(); }
+          : async (d) => { await api.superAdmin.createPlan(d); loadPlans(); }
+        }
+      />
       <PaymentModal open={payModal} onClose={() => setPayModal(false)} schools={schools}
         onSave={async (d) => { await api.superAdmin.recordPayment(d); loadPayments(); }} />
     </>

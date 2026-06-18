@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           localStorage.setItem(USER_KEY, JSON.stringify(refreshed));
         })
       : api.auth.meSchool().then((data) => {
-          const refreshed: User = { id: data.id, name: data.name, email: data.email, role: data.role as UserRole, schoolId: data.schoolId, schoolName: data.schoolName };
+          const refreshed: User = { id: data.id, name: data.name, email: data.email, role: data.role as UserRole, schoolId: data.schoolId, schoolName: data.schoolName, features: data.features, planSlug: data.planSlug, planName: data.planName, schoolStatus: data.schoolStatus };
           setUser(refreshed);
           localStorage.setItem(USER_KEY, JSON.stringify(refreshed));
         });
@@ -78,7 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         const res = await api.auth.loginSchool(email, password);
         localStorage.setItem(TOKEN_KEY, res.token);
-        const u: User = { id: res.user.id, name: res.user.name, email: res.user.email, role: res.user.role as UserRole, schoolId: res.user.schoolId, schoolName: res.user.schoolName };
+        const u: User = { id: res.user.id, name: res.user.name, email: res.user.email, role: res.user.role as UserRole, schoolId: res.user.schoolId, schoolName: res.user.schoolName, features: res.user.features, planSlug: res.user.planSlug, planName: res.user.planName, schoolStatus: res.user.schoolStatus };
         setUser(u);
         localStorage.setItem(USER_KEY, JSON.stringify(u));
         return u;

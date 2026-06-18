@@ -1,4 +1,4 @@
-import { LayoutDashboard, BookOpen, CalendarCheck, FileText, Clock, Megaphone, Settings } from "lucide-react";
+import { LayoutDashboard, BookOpen, CalendarCheck, FileText, Clock, Megaphone, Settings, GraduationCap } from "lucide-react";
 import type { NavSection } from "@/types";
 
 export const studentNav: NavSection[] = [
@@ -14,6 +14,7 @@ export const studentNav: NavSection[] = [
       { label: "My Subjects", href: "/student/subjects", icon: BookOpen },
       { label: "Timetable", href: "/student/timetable", icon: Clock },
       { label: "Attendance", href: "/student/attendance", icon: CalendarCheck },
+      { label: "Exams", href: "/student/exams", icon: GraduationCap },
       { label: "Results", href: "/student/results", icon: FileText },
     ],
   },

@@ -282,7 +282,7 @@ export default function Classes() {
                       className="text-xs flex items-center gap-1 px-3 py-1.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-100">
                       <Plus className="w-3 h-3" /> Section
                     </button>
-                    <button onClick={async (e) => { e.stopPropagation(); if (confirm("Delete this grade? All sections will also be removed.")) { await api.admin.deleteGrade(grade.id); load(); } }}
+                    <button onClick={async (e) => { e.stopPropagation(); if (confirm("Delete this grade? All sections will also be removed.")) { try { await api.admin.deleteGrade(grade.id); } finally { load(); } } }}
                       className="p-1.5 text-gray-300 hover:text-rose-400 hover:bg-rose-50 rounded-lg">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -302,17 +302,17 @@ export default function Classes() {
                           const pct = Math.round((occupied / total) * 100);
                           return (
                             <div key={sec.id} onClick={() => navigate(`/admin/sections/${sec.id}`)}
-                              className={cn("rounded-xl p-3 border cursor-pointer hover:shadow-md transition-shadow", perf.color.includes("emerald") ? "bg-emerald-50/50 border-emerald-100" : perf.color.includes("blue") ? "bg-blue-50/50 border-blue-100" : perf.color.includes("amber") ? "bg-amber-50/50 border-amber-100" : "bg-rose-50/50 border-rose-100")}>
+                              className={cn("group rounded-xl p-3 border cursor-pointer hover:shadow-md transition-shadow", perf.color.includes("emerald") ? "bg-emerald-50/50 border-emerald-100" : perf.color.includes("blue") ? "bg-blue-50/50 border-blue-100" : perf.color.includes("amber") ? "bg-amber-50/50 border-amber-100" : "bg-rose-50/50 border-rose-100")}>
                               <div className="flex items-start justify-between mb-2">
-                                <div className="flex items-center gap-1.5">
-                                  <div className={cn("w-2 h-2 rounded-full", perf.dot)} />
-                                  <p className="text-sm font-semibold text-gray-800">{sec.name}</p>
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <div className={cn("w-2 h-2 rounded-full shrink-0", perf.dot)} />
+                                  <p className="text-sm font-semibold text-gray-800 truncate">{sec.name}</p>
                                 </div>
-                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="flex gap-1 shrink-0 ml-1">
                                   <button onClick={(e) => { e.stopPropagation(); setEditSection({ ...sec, gradeId: grade.id }); setSectionModal(null); }}
-                                    className="p-0.5 text-gray-300 hover:text-blue-500 rounded"><Edit3 className="w-3 h-3" /></button>
-                                  <button onClick={async (e) => { e.stopPropagation(); if (confirm("Delete this section?")) { await api.admin.deleteSection(sec.id); load(); } }}
-                                    className="p-0.5 text-gray-300 hover:text-rose-400 rounded"><Trash2 className="w-3 h-3" /></button>
+                                    className="p-1 text-gray-400 hover:text-blue-500 hover:bg-white rounded-lg transition-colors"><Edit3 className="w-3 h-3" /></button>
+                                  <button onClick={async (e) => { e.stopPropagation(); if (confirm("Delete this section?")) { try { await api.admin.deleteSection(sec.id); } finally { load(); } } }}
+                                    className="p-1 text-gray-400 hover:text-rose-500 hover:bg-white rounded-lg transition-colors"><Trash2 className="w-3 h-3" /></button>
                                 </div>
                               </div>
                               <p className="text-[11px] text-blue-500 mb-1">View students →</p>
@@ -345,18 +345,19 @@ export default function Classes() {
       </div>
 
       <GradeModal open={gradeModal} onClose={() => setGradeModal(false)} departments={departments}
-        onSave={async (d) => { await api.admin.createGrade(d); load(); }} />
+        onSave={async (d) => { try { await api.admin.createGrade(d); } finally { load(); } }} />
       <SectionModal open={!!sectionModal || !!editSection} onClose={() => { setSectionModal(null); setEditSection(null); }}
         gradeId={editSection?.gradeId || sectionModal || ""} initial={editSection}
         onSave={async (d) => {
-          if (editSection) {
-            await api.admin.updateSection(editSection.id, d);
-            setEditSection(null);
-          } else {
-            await api.admin.createSection(sectionModal!, d);
-            setSectionModal(null);
-          }
-          load();
+          try {
+            if (editSection) {
+              await api.admin.updateSection(editSection.id, d);
+              setEditSection(null);
+            } else {
+              await api.admin.createSection(sectionModal!, d);
+              setSectionModal(null);
+            }
+          } finally { load(); }
         }} />
     </>
   );
