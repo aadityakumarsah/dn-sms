@@ -19,7 +19,10 @@ const app = (
   </StrictMode>
 );
 
-// https://bun.com/docs/bundler/hot-reloading#import-meta-hot-data
-// NOTE: `import.meta.hot.data` must be accessed DIRECTLY — Bun rewrites it at
-// build time; aliasing it (const hot = import.meta.hot) throws at runtime.
-(import.meta.hot.data.root ??= createRoot(elem)).render(app);
+if (import.meta.hot) {
+  // Dev: reuse root across HMR updates to avoid remounting the full tree.
+  // Bun rewrites import.meta.hot.data directly — do not alias import.meta.hot.
+  (import.meta.hot.data.root ??= createRoot(elem)).render(app);
+} else {
+  createRoot(elem).render(app);
+}
