@@ -7,6 +7,7 @@
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { Analytics } from "@vercel/analytics/react";
 import App from "./App";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 
@@ -15,6 +16,7 @@ const app = (
   <StrictMode>
     <ErrorBoundary>
       <App />
+      <Analytics />
     </ErrorBoundary>
   </StrictMode>
 );

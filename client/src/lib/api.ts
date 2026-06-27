@@ -2,7 +2,9 @@
 // the define option in build.ts. Must be referenced directly (not via alias)
 // so Bun's define substitution matches the literal token.
 function resolveBase(): string {
-  if (process.env.PUBLIC_API_URL) return String(process.env.PUBLIC_API_URL).replace(/\/$/, "");
+  if (typeof process !== "undefined" && process.env?.PUBLIC_API_URL) {
+    return String(process.env.PUBLIC_API_URL).replace(/\/$/, "");
+  }
   if (typeof window !== "undefined" && window.location?.hostname && window.location.hostname !== "localhost") {
     return ""; // same-origin fallback
   }
