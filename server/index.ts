@@ -12,8 +12,32 @@ import {
 } from "./auth.handlers.ts";
 import { hashPassword } from "./auth.utils.ts";
 
-const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL!,
+  max: 10, // cap pool at 10 connections — prevents DB exhaustion under load
+});
 const prisma = new PrismaClient({ adapter });
+
+// ─── Rate limiter (in-memory, per IP) ────────────────────────────────────────
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+function rateLimit(req: Request, limit: number, windowMs: number): boolean {
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+  entry.count++;
+  return entry.count > limit;
+}
+// Clean up stale entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) {
+    if (now > entry.resetAt) rateLimitMap.delete(ip);
+  }
+}, 5 * 60 * 1000);
 
 if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
   throw new Error("JWT_SECRET must be set in production — refusing to start with the insecure dev fallback.");
@@ -4315,11 +4339,17 @@ Bun.serve({
   idleTimeout: 0,
 
   async fetch(req) {
+    try {
     const url = new URL(req.url);
     const p = url.pathname;
     const h = cors(req);
 
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: h });
+
+    // Rate-limit auth endpoints: 10 attempts per IP per minute
+    if (p.startsWith("/api/auth") && req.method === "POST") {
+      if (rateLimit(req, 10, 60_000)) return err("Too many requests", 429, h);
+    }
 
     // Health
     if (p === "/health") return json({ ok: true, ts: new Date().toISOString() }, 200, h);
@@ -4831,6 +4861,13 @@ Bun.serve({
     if (p === "/api/parent/routine") return parentRoutine(req, h, url);
 
     return json({ error: "Not found" }, 404, h);
+    } catch (e) {
+      console.error("Unhandled request error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
   },
 });
 
