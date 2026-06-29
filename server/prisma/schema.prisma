@@ -323,6 +323,7 @@ model Section {
   occupiedSeats  Int                @default(0)
   performance    SectionPerformance @default(AVERAGE)
   classTeacherId String?
+  stream         String?
   roomNo         String?
   createdAt      DateTime           @default(now())
 

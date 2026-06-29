@@ -205,6 +205,9 @@ export const api = {
     sectionDetail: (id: string) => request<any>(`/api/admin/sections/${id}`),
     updateSection: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/sections/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     deleteSection: (id: string) => request<any>(`/api/admin/sections/${id}`, { method: "DELETE" }),
+    sectionSubjects: (id: string) => request<any[]>(`/api/admin/sections/${id}/subjects`),
+    addSectionSubject: (id: string, subjectId: string) => request<any>(`/api/admin/sections/${id}/subjects`, { method: "POST", body: JSON.stringify({ subjectId }) }),
+    removeSectionSubject: (assignmentId: string) => request<any>(`/api/admin/section-subjects/${assignmentId}`, { method: "DELETE" }),
 
     // Transport / Buses
     buses: () => request<any>("/api/admin/buses"),

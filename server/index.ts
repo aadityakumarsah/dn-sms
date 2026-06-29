@@ -2346,6 +2346,72 @@ async function getTeacherClasses(req: Request, h: Headers): Promise<Response> {
   return json(Array.from(sectionMap.values()), 200, h);
 }
 
+// ─── Section Subject Management (admin) ──────────────────────────────────────
+
+async function getSectionSubjects(req: Request, h: Headers, sectionId: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const section = await prisma.section.findFirst({ where: { id: sectionId, grade: { schoolId: u.schoolId } } });
+  if (!section) return err("Section not found", 404, h);
+  const assignments = await prisma.subjectAssignment.findMany({
+    where: { sectionId },
+    include: { subject: true },
+    orderBy: { subject: { name: "asc" } },
+  });
+  // For each subject, find assigned teacher
+  const teacherMap = await prisma.teacherSubjectAssignment.findMany({
+    where: { sectionId, subjectId: { in: assignments.map((a) => a.subjectId) } },
+    include: { teacher: { include: { user: { include: { profile: true } } } } },
+  });
+  const teacherBySubject = new Map(teacherMap.map((t) => [
+    t.subjectId,
+    { id: t.teacher.id, name: t.teacher.user.profile ? `${t.teacher.user.profile.firstName} ${t.teacher.user.profile.lastName}`.trim() : t.teacher.user.email },
+  ]));
+  return json(assignments.map((a) => ({
+    id: a.id, subjectId: a.subject.id, name: a.subject.name, code: a.subject.code,
+    isElective: a.subject.isElective, creditHours: a.subject.creditHours,
+    teacher: teacherBySubject.get(a.subjectId) ?? null,
+  })), 200, h);
+}
+
+async function addSectionSubject(req: Request, h: Headers, sectionId: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const section = await prisma.section.findFirst({ where: { id: sectionId, grade: { schoolId: u.schoolId } } });
+  if (!section) return err("Section not found", 404, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.subjectId) return err("subjectId required", 400, h);
+  const subject = await prisma.subject.findFirst({ where: { id: body.subjectId, schoolId: u.schoolId } });
+  if (!subject) return err("Subject not found", 404, h);
+  const existing = await prisma.subjectAssignment.findFirst({ where: { sectionId, subjectId: body.subjectId } });
+  if (existing) return err("Subject already assigned to this section", 400, h);
+  const a = await prisma.subjectAssignment.create({ data: { sectionId, subjectId: body.subjectId } });
+  return json({ id: a.id, subjectId: subject.id, name: subject.name, code: subject.code, isElective: subject.isElective, creditHours: subject.creditHours, teacher: null }, 201, h);
+}
+
+async function removeSectionSubject(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const a = await prisma.subjectAssignment.findFirst({ where: { id, section: { grade: { schoolId: u.schoolId } } } });
+  if (!a) return err("Assignment not found", 404, h);
+  await prisma.subjectAssignment.delete({ where: { id } });
+  return json({ ok: true }, 200, h);
+}
+
+async function updateSectionMeta(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const section = await prisma.section.findFirst({ where: { id, grade: { schoolId: u.schoolId } } });
+  if (!section) return err("Section not found", 404, h);
+  const body = await req.json().catch(() => null);
+  const data: Record<string, unknown> = {};
+  if (body?.stream !== undefined) data.stream = body.stream || null;
+  if (body?.classTeacherId !== undefined) data.classTeacherId = body.classTeacherId || null;
+  if (body?.roomNo !== undefined) data.roomNo = body.roomNo || null;
+  const updated = await prisma.section.update({ where: { id }, data });
+  return json({ id: updated.id, stream: updated.stream, classTeacherId: updated.classTeacherId, roomNo: updated.roomNo }, 200, h);
+}
+
 // ─── Teacher Assignment Management (admin) ────────────────────────────────────
 
 async function getTeacherAssignments(req: Request, h: Headers, teacherId: string): Promise<Response> {
@@ -3039,13 +3105,47 @@ async function getSectionDetail(req: Request, h: Headers, id: string): Promise<R
     };
   });
 
+  // Subjects with assigned teachers
+  const subjectRows = await prisma.subjectAssignment.findMany({
+    where: { sectionId: section.id },
+    include: { subject: true },
+    orderBy: { subject: { name: "asc" } },
+  });
+  const teacherRows = await prisma.teacherSubjectAssignment.findMany({
+    where: { sectionId: section.id, subjectId: { in: subjectRows.map((r) => r.subjectId) } },
+    include: { teacher: { include: { user: { include: { profile: true } } } } },
+  });
+  const teacherBySubject = new Map(teacherRows.map((t) => [
+    t.subjectId,
+    { id: t.teacher.id, name: t.teacher.user.profile ? `${t.teacher.user.profile.firstName} ${t.teacher.user.profile.lastName}`.trim() : t.teacher.user.email },
+  ]));
+
+  // Class teacher
+  let classTeacher: { id: string; name: string } | null = null;
+  if ((section as any).classTeacherId) {
+    const ct = await prisma.teacher.findFirst({
+      where: { id: (section as any).classTeacherId },
+      include: { user: { include: { profile: true } } },
+    });
+    if (ct) classTeacher = { id: ct.id, name: ct.user.profile ? `${ct.user.profile.firstName} ${ct.user.profile.lastName}`.trim() : ct.user.email };
+  }
+
   return json({
     id: section.id, name: section.name, performance: section.performance,
     totalSeats: section.totalSeats, occupiedSeats: students.length,
     seatsRemaining: Math.max(0, section.totalSeats - students.length),
-    roomNo: section.roomNo,
+    roomNo: (section as any).roomNo ?? null,
+    stream: (section as any).stream ?? null,
+    classTeacherId: (section as any).classTeacherId ?? null,
+    classTeacher,
     gradeName: section.grade.name, gradeId: section.gradeId,
+    gradeNumber: section.grade.gradeNumber,
     academicYear: section.grade.academicYear?.name ?? null,
+    subjects: subjectRows.map((r) => ({
+      id: r.id, subjectId: r.subject.id, name: r.subject.name, code: r.subject.code,
+      isElective: r.subject.isElective, creditHours: r.subject.creditHours,
+      teacher: teacherBySubject.get(r.subjectId) ?? null,
+    })),
     students,
   }, 200, h);
 }
@@ -4622,9 +4722,16 @@ Bun.serve({
     const sectionMatch = p.match(/^\/api\/admin\/sections\/([^/]+)$/);
     if (sectionMatch) {
       if (req.method === "GET") return getSectionDetail(req, h, sectionMatch[1]);
-      if (req.method === "PATCH") return updateSection(req, h, sectionMatch[1]);
+      if (req.method === "PATCH") return updateSectionMeta(req, h, sectionMatch[1]);
       if (req.method === "DELETE") return deleteSection(req, h, sectionMatch[1]);
     }
+    const sectionSubjectsMatch = p.match(/^\/api\/admin\/sections\/([^/]+)\/subjects$/);
+    if (sectionSubjectsMatch) {
+      if (req.method === "GET") return getSectionSubjects(req, h, sectionSubjectsMatch[1]);
+      if (req.method === "POST") return addSectionSubject(req, h, sectionSubjectsMatch[1]);
+    }
+    const sectionSubjectDeleteMatch = p.match(/^\/api\/admin\/section-subjects\/([^/]+)$/);
+    if (sectionSubjectDeleteMatch && req.method === "DELETE") return removeSectionSubject(req, h, sectionSubjectDeleteMatch[1]);
 
     // Transport (buses & routes)
     if (p === "/api/admin/buses") {
