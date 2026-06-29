@@ -31,6 +31,7 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [expandedItems, setExpandedItems] = useState<string[]>([]);
+  const [sidebarQuery, setSidebarQuery] = useState("");
 
   if (!user) return null;
   const config = PORTAL_CONFIGS[user.role];
@@ -234,18 +235,115 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
           </div>
         )}
 
+        {/* Sidebar search */}
+        <div className={cn("px-2 pt-2 pb-1 border-b shrink-0", borderColor)}>
+          <div className="relative">
+            <Search className={cn("absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none", isDark ? "text-white/30" : "text-gray-400")} />
+            <input
+              type="text"
+              value={sidebarQuery}
+              onChange={(e) => setSidebarQuery(e.target.value)}
+              placeholder="Search menu…"
+              className={cn(
+                "w-full pl-8 pr-7 py-1.5 text-xs rounded-lg outline-none transition-colors",
+                isDark
+                  ? "bg-white/8 text-white placeholder-white/30 focus:bg-white/12 focus:ring-1 focus:ring-white/20"
+                  : "bg-gray-100 text-gray-700 placeholder-gray-400 focus:bg-white focus:ring-1 focus:ring-blue-400"
+              )}
+            />
+            {sidebarQuery && (
+              <button
+                onClick={() => setSidebarQuery("")}
+                className={cn("absolute right-2 top-1/2 -translate-y-1/2", isDark ? "text-white/30 hover:text-white/60" : "text-gray-400 hover:text-gray-600")}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
-          {dynamicSections.map((sec) => (
-            <div key={sec.section}>
-              {sec.section && (
-                <p className={cn("text-[10px] font-semibold uppercase tracking-widest px-3 mb-1.5", isDark ? "text-white/25" : "text-gray-400")}>
-                  {sec.section}
+          {(() => {
+            const q = sidebarQuery.trim().toLowerCase();
+            if (!q) {
+              return dynamicSections.map((sec) => (
+                <div key={sec.section}>
+                  {sec.section && (
+                    <p className={cn("text-[10px] font-semibold uppercase tracking-widest px-3 mb-1.5", isDark ? "text-white/25" : "text-gray-400")}>
+                      {sec.section}
+                    </p>
+                  )}
+                  <div>{sec.items.map(renderNavItem)}</div>
+                </div>
+              ));
+            }
+
+            // Flatten all items + children for search
+            const matches: { item: NavItem; sectionLabel: string }[] = [];
+            for (const sec of dynamicSections) {
+              for (const item of sec.items) {
+                if (item.label.toLowerCase().includes(q)) {
+                  matches.push({ item, sectionLabel: sec.section });
+                }
+                if (item.children) {
+                  for (const child of item.children) {
+                    if (child.label.toLowerCase().includes(q)) {
+                      matches.push({ item: child, sectionLabel: item.label });
+                    }
+                  }
+                }
+              }
+            }
+
+            if (matches.length === 0) {
+              return (
+                <p className={cn("text-xs text-center py-6 px-3", isDark ? "text-white/30" : "text-gray-400")}>
+                  No results for &ldquo;{sidebarQuery}&rdquo;
                 </p>
-              )}
-              <div>{sec.items.map(renderNavItem)}</div>
-            </div>
-          ))}
+              );
+            }
+
+            return (
+              <div>
+                <p className={cn("text-[10px] font-semibold uppercase tracking-widest px-3 mb-1.5", isDark ? "text-white/25" : "text-gray-400")}>
+                  {matches.length} result{matches.length !== 1 ? "s" : ""}
+                </p>
+                {matches.map(({ item, sectionLabel }) => {
+                  const Icon = item.icon;
+                  const active = isActive(item.href);
+                  return (
+                    <Link
+                      key={item.href}
+                      to={item.locked ? "#" : item.href}
+                      onClick={() => { if (!item.locked) { setSidebarOpen(false); setSidebarQuery(""); } }}
+                      className={cn(
+                        "flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors mb-0.5",
+                        item.locked
+                          ? cn("cursor-not-allowed select-none", isDark ? "text-white/30" : "text-gray-400")
+                          : isDark
+                            ? active ? "bg-white/12 text-white" : "text-white/60 hover:text-white hover:bg-white/8"
+                            : active ? cn("text-white shadow-sm", config.bgColor) : "text-gray-600 hover:bg-gray-100"
+                      )}
+                    >
+                      <Icon className="w-4 h-4 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <span className="block truncate">{item.label}</span>
+                        {sectionLabel && (
+                          <span className={cn("text-[10px] truncate", isDark ? "text-white/25" : "text-gray-400")}>{sectionLabel}</span>
+                        )}
+                      </div>
+                      {item.locked && (
+                        <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-1", BADGE_COLORS.danger)}>
+                          <Lock className="w-2.5 h-2.5" /> Upgrade
+                        </span>
+                      )}
+                    </Link>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </nav>
 
         {/* User */}
