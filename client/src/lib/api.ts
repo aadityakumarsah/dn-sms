@@ -2,8 +2,11 @@
 // the define option in build.ts. Must be referenced directly (not via alias)
 // so Bun's define substitution matches the literal token.
 function resolveBase(): string {
-  // Bun replaces this token at build time — must stay as a direct reference
-  if (process.env.PUBLIC_API_URL) return String(process.env.PUBLIC_API_URL).replace(/\/$/, "");
+  // Bun replaces this token at build time. try/catch guards against
+  // ReferenceError if the bundle runs without the define substitution.
+  try {
+    if (process.env.PUBLIC_API_URL) return String(process.env.PUBLIC_API_URL).replace(/\/$/, "");
+  } catch { /* process undefined — substitution was skipped */ }
   if (typeof window !== "undefined" && window.location?.hostname && window.location.hostname !== "localhost") {
     return ""; // same-origin fallback
   }
