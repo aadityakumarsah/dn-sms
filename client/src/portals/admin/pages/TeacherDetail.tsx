@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Mail, Phone, Calendar, BookOpen, Award, Briefcase, Key, Eye, EyeOff, Copy, CheckCheck, Wallet, Pencil, Check, Trash2 } from "lucide-react";
+import { ArrowLeft, Mail, Phone, Calendar, BookOpen, Award, Briefcase, Key, Eye, EyeOff, Copy, CheckCheck, Wallet, Pencil, Check, Trash2, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 
@@ -245,6 +245,124 @@ function PayrollHistory({ teacherId }: { teacherId: string }) {
   );
 }
 
+function SubjectSectionCard({ teacherId }: { teacherId: string }) {
+  const [assignments, setAssignments] = useState<any[]>([]);
+  const [grades, setGrades] = useState<any[]>([]);
+  const [subjects, setSubjects] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ sectionId: "", subjectId: "" });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      api.admin.teacherAssignments(teacherId),
+      api.admin.gradesWithSections(),
+      api.admin.subjects(),
+    ]).then(([a, g, s]) => { setAssignments(a); setGrades(g); setSubjects(s); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, [teacherId]);
+
+  const save = async () => {
+    if (!form.sectionId || !form.subjectId) { setError("Select both a section and a subject."); return; }
+    setSaving(true); setError("");
+    try {
+      await api.admin.addTeacherAssignment(teacherId, { sectionId: form.sectionId, subjectId: form.subjectId });
+      setAdding(false); setForm({ sectionId: "", subjectId: "" }); load();
+    } catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const remove = async (id: string) => {
+    if (!confirm("Remove this assignment?")) return;
+    try { await api.admin.deleteTeacherAssignment(id); load(); } catch { }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-5 md:col-span-2">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
+          <BookOpen className="w-4 h-4 text-gray-300" /> Class &amp; Subject Assignments
+        </h2>
+        {!adding && (
+          <button onClick={() => { setAdding(true); setError(""); }} className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+            <Plus className="w-3 h-3" /> Add
+          </button>
+        )}
+      </div>
+
+      {adding && (
+        <div className="mb-4 p-4 bg-blue-50/50 rounded-xl border border-blue-100 space-y-3">
+          {error && <div className="p-2 bg-rose-50 text-rose-600 text-xs rounded-lg">{error}</div>}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Section (Class)</label>
+              <select value={form.sectionId} onChange={(e) => setForm(f => ({ ...f, sectionId: e.target.value }))}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-400">
+                <option value="">Select section…</option>
+                {grades.map((g) => (
+                  <optgroup key={g.id} label={g.name}>
+                    {g.sections.map((s: any) => (
+                      <option key={s.id} value={s.id}>{g.name} — {s.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
+              <select value={form.subjectId} onChange={(e) => setForm(f => ({ ...f, subjectId: e.target.value }))}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-400">
+                <option value="">Select subject…</option>
+                {subjects.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => { setAdding(false); setError(""); setForm({ sectionId: "", subjectId: "" }); }}
+              className="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"><X className="w-3 h-3" /> Cancel</button>
+            <button onClick={save} disabled={saving}
+              className="px-4 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium">
+              {saving ? "Saving…" : "Assign"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="h-16 bg-gray-50 rounded-xl animate-pulse" />
+      ) : assignments.length === 0 ? (
+        <p className="text-sm text-gray-400 py-3 text-center">No assignments yet. Click Add to assign a class &amp; subject.</p>
+      ) : (
+        <div className="divide-y divide-gray-50">
+          {assignments.map((a) => (
+            <div key={a.id} className="flex items-center justify-between py-2.5">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-xs">
+                  {a.section?.grade?.gradeNumber ?? "—"}
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-800">
+                    {a.section ? `${a.section.grade.name} — ${a.section.name}` : "No section"}
+                  </p>
+                  <p className="text-xs text-gray-400">{a.subject.name}</p>
+                </div>
+              </div>
+              <button onClick={() => remove(a.id)} className="p-1.5 text-gray-300 hover:text-rose-500 rounded-lg hover:bg-rose-50">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function TeacherDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -310,6 +428,8 @@ export default function TeacherDetail() {
         <SalaryCard teacher={t} onUpdated={load} />
 
         {t.email && <CredentialCard teacherId={t.id} email={t.email} />}
+
+        <SubjectSectionCard teacherId={t.id} />
 
         <PayrollHistory teacherId={t.id} />
       </div>

@@ -2308,21 +2308,109 @@ async function getTeacherClasses(req: Request, h: Headers): Promise<Response> {
   const teacher = await prisma.teacher.findFirst({ where: { userId: u.id } });
   if (!teacher) return err("Teacher record not found", 404, h);
 
-  const sections = await prisma.section.findMany({
-    where: { timetableSlots: { some: { teacherId: teacher.id } } },
-    include: { grade: true, enrollments: { where: { status: "ACTIVE" }, include: { student: { include: { user: { include: { profile: true } } } } } } },
-    distinct: ["id"],
+  const assignments = await prisma.teacherSubjectAssignment.findMany({
+    where: { teacherId: teacher.id, sectionId: { not: null } },
+    include: {
+      subject: true,
+      section: {
+        include: {
+          grade: true,
+          enrollments: { where: { status: "ACTIVE" }, include: { student: { include: { user: { include: { profile: true } } } } } },
+        },
+      },
+    },
   });
 
-  return json(sections.map((s) => ({
-    id: s.id, name: `${s.grade.name} ${s.name}`, gradeNumber: s.grade.gradeNumber,
-    students: s.enrollments.map((e) => ({
-      id: e.student.id,
-      rollNo: e.rollNo ?? e.student.rollNumber ?? null,
-      name: e.student.user.profile ? `${e.student.user.profile.firstName} ${e.student.user.profile.lastName}`.trim() : e.student.user.email,
-      avatar: e.student.user.profile?.avatar ?? null,
-      stream: e.student.stream ?? null,
-    })),
+  const sectionMap = new Map<string, any>();
+  for (const a of assignments) {
+    if (!a.section) continue;
+    const sec = a.section;
+    if (!sectionMap.has(sec.id)) {
+      sectionMap.set(sec.id, {
+        id: sec.id,
+        name: `${sec.grade.name} ${sec.name}`,
+        gradeNumber: sec.grade.gradeNumber,
+        subjects: [],
+        students: sec.enrollments.map((e) => ({
+          id: e.student.id,
+          rollNo: e.rollNo ?? e.student.rollNumber ?? null,
+          name: e.student.user.profile ? `${e.student.user.profile.firstName} ${e.student.user.profile.lastName}`.trim() : e.student.user.email,
+          avatar: e.student.user.profile?.avatar ?? null,
+          stream: e.student.stream ?? null,
+        })),
+      });
+    }
+    sectionMap.get(sec.id).subjects.push(a.subject.name);
+  }
+
+  return json(Array.from(sectionMap.values()), 200, h);
+}
+
+// ─── Teacher Assignment Management (admin) ────────────────────────────────────
+
+async function getTeacherAssignments(req: Request, h: Headers, teacherId: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const teacher = await prisma.teacher.findFirst({ where: { id: teacherId, user: { schoolId: u.schoolId } } });
+  if (!teacher) return err("Teacher not found", 404, h);
+  const assignments = await prisma.teacherSubjectAssignment.findMany({
+    where: { teacherId },
+    include: { subject: true, section: { include: { grade: true } } },
+    orderBy: { id: "asc" },
+  });
+  return json(assignments.map((a) => ({
+    id: a.id,
+    subject: { id: a.subject.id, name: a.subject.name },
+    section: a.section ? { id: a.section.id, name: a.section.name, grade: { id: a.section.grade.id, name: a.section.grade.name, gradeNumber: a.section.grade.gradeNumber } } : null,
+  })), 200, h);
+}
+
+async function addTeacherAssignment(req: Request, h: Headers, teacherId: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const teacher = await prisma.teacher.findFirst({ where: { id: teacherId, user: { schoolId: u.schoolId } } });
+  if (!teacher) return err("Teacher not found", 404, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.subjectId || !body?.sectionId) return err("subjectId and sectionId required", 400, h);
+  const subject = await prisma.subject.findFirst({ where: { id: body.subjectId, schoolId: u.schoolId } });
+  if (!subject) return err("Subject not found", 404, h);
+  const section = await prisma.section.findFirst({ where: { id: body.sectionId, grade: { schoolId: u.schoolId } } });
+  if (!section) return err("Section not found", 404, h);
+  const existing = await prisma.teacherSubjectAssignment.findFirst({ where: { teacherId, subjectId: body.subjectId, sectionId: body.sectionId } });
+  if (existing) return err("This assignment already exists", 400, h);
+  const a = await prisma.teacherSubjectAssignment.create({
+    data: { teacherId, subjectId: body.subjectId, sectionId: body.sectionId },
+    include: { subject: true, section: { include: { grade: true } } },
+  });
+  return json({
+    id: a.id,
+    subject: { id: a.subject.id, name: a.subject.name },
+    section: a.section ? { id: a.section.id, name: a.section.name, grade: { id: a.section.grade.id, name: a.section.grade.name, gradeNumber: a.section.grade.gradeNumber } } : null,
+  }, 201, h);
+}
+
+async function deleteTeacherAssignment(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const a = await prisma.teacherSubjectAssignment.findFirst({ where: { id, teacher: { user: { schoolId: u.schoolId } } } });
+  if (!a) return err("Assignment not found", 404, h);
+  await prisma.teacherSubjectAssignment.delete({ where: { id } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Grades list (for dropdowns) ─────────────────────────────────────────────
+
+async function getGradesWithSections(req: Request, h: Headers): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || (u.role !== "admin" && u.role !== "teacher")) return err("Unauthorized", 401, h);
+  const grades = await prisma.grade.findMany({
+    where: { schoolId: u.schoolId },
+    include: { sections: { orderBy: { name: "asc" } } },
+    orderBy: { gradeNumber: "asc" },
+  });
+  return json(grades.map((g) => ({
+    id: g.id, name: g.name, gradeNumber: g.gradeNumber,
+    sections: g.sections.map((s) => ({ id: s.id, name: s.name })),
   })), 200, h);
 }
 
@@ -4487,6 +4575,13 @@ Bun.serve({
     }
     const teacherCredsMatch = p.match(/^\/api\/admin\/teachers\/([^/]+)\/credentials$/);
     if (teacherCredsMatch && req.method === "PATCH") return updateTeacherCredentials(req, h, teacherCredsMatch[1]);
+    const teacherAssignmentsMatch = p.match(/^\/api\/admin\/teachers\/([^/]+)\/assignments$/);
+    if (teacherAssignmentsMatch) {
+      if (req.method === "GET") return getTeacherAssignments(req, h, teacherAssignmentsMatch[1]);
+      if (req.method === "POST") return addTeacherAssignment(req, h, teacherAssignmentsMatch[1]);
+    }
+    const deleteAssignmentMatch = p.match(/^\/api\/admin\/teacher-assignments\/([^/]+)$/);
+    if (deleteAssignmentMatch && req.method === "DELETE") return deleteTeacherAssignment(req, h, deleteAssignmentMatch[1]);
 
     // Staff (non-teaching)
     if (p === "/api/admin/staff") {
@@ -4514,6 +4609,7 @@ Bun.serve({
     // Classes / Academic Structure
     if (p === "/api/admin/classes") return getClasses(req, h);
     if (p === "/api/admin/grades") {
+      if (req.method === "GET") return getGradesWithSections(req, h);
       if (req.method === "POST") return createGrade(req, h);
     }
     const gradeMatch = p.match(/^\/api\/admin\/grades\/([^/]+)$/);

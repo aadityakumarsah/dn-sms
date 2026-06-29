@@ -173,6 +173,10 @@ export const api = {
     updateTeacher: (id: string, data: Record<string, unknown>) => request<any>(`/api/admin/teachers/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     updateTeacherCredentials: (id: string, data: { email?: string; password?: string }) => request<any>(`/api/admin/teachers/${id}/credentials`, { method: "PATCH", body: JSON.stringify(data) }),
     deleteTeacher: (id: string) => request<any>(`/api/admin/teachers/${id}`, { method: "DELETE" }),
+    teacherAssignments: (id: string) => request<any[]>(`/api/admin/teachers/${id}/assignments`),
+    addTeacherAssignment: (id: string, data: { subjectId: string; sectionId: string }) => request<any>(`/api/admin/teachers/${id}/assignments`, { method: "POST", body: JSON.stringify(data) }),
+    deleteTeacherAssignment: (assignmentId: string) => request<any>(`/api/admin/teacher-assignments/${assignmentId}`, { method: "DELETE" }),
+    gradesWithSections: () => request<any[]>("/api/admin/grades"),
 
     // Staff (non-teaching)
     staff: (p?: { search?: string; designation?: string }) => {
