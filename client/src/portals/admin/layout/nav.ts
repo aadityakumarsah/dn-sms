@@ -34,7 +34,7 @@ export const adminNav: NavSection[] = [
     items: [
       { label: "Classes & Sections", href: "/admin/classes", icon: BookOpen, feature: "classes_sections" },
       { label: "Section Management", href: "/admin/sections", icon: LayoutGrid, feature: "section_mgmt" },
-      { label: "Subjects", href: "/admin/subjects", icon: BookOpen, feature: "subjects_mgmt" },
+      { label: "Subjects", href: "/admin/subjects", icon: BookOpen, feature: "classes_sections" },
       { label: "Departments", href: "/admin/departments", icon: Building2, feature: "departments" },
       { label: "Attendance", href: "/admin/attendance", icon: CalendarCheck, feature: "attendance_leave" },
       { label: "Examinations", href: "/admin/exams", icon: ClipboardList, feature: "exams_ledger" },
