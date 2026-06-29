@@ -37,6 +37,7 @@ const AdminStaffDetail = lazy(() => import("@/portals/admin/pages/StaffDetail"))
 const AdminClasses = lazy(() => import("@/portals/admin/pages/Classes"));
 const AdminSections = lazy(() => import("@/portals/admin/pages/Sections"));
 const AdminSectionDetail = lazy(() => import("@/portals/admin/pages/SectionDetail"));
+const AdminSubjects = lazy(() => import("@/portals/admin/pages/Subjects"));
 const AdminTransport = lazy(() => import("@/portals/admin/pages/Transport"));
 const AdminDepartments = lazy(() => import("@/portals/admin/pages/Departments"));
 const AdminAttendance = lazy(() => import("@/portals/admin/pages/Attendance"));
@@ -166,6 +167,7 @@ export default function App() {
                     <Route path="classes" element={<AdminClasses />} />
                     <Route path="sections" element={<AdminSections />} />
                     <Route path="sections/:id" element={<AdminSectionDetail />} />
+                    <Route path="subjects" element={<AdminSubjects />} />
                     <Route path="transport" element={<AdminTransport />} />
                     <Route path="departments" element={<AdminDepartments />} />
                     <Route path="attendance" element={<AdminAttendance />} />

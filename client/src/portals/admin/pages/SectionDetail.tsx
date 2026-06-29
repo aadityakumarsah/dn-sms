@@ -163,30 +163,57 @@ function StreamEditor({ sectionId, current, onUpdated }: { sectionId: string; cu
   );
 }
 
-function SectionSubjectsCard({ sectionId, initialSubjects, onUpdated }: { sectionId: string; initialSubjects: any[]; onUpdated: () => void }) {
+function SectionSubjectsCard({ sectionId, gradeId, initialSubjects, onUpdated }: { sectionId: string; gradeId: string; initialSubjects: any[]; onUpdated: () => void }) {
   const [subjects, setSubjects] = useState<any[]>(initialSubjects);
   const [allSubjects, setAllSubjects] = useState<any[]>([]);
   const [adding, setAdding] = useState(false);
+  const [mode, setMode] = useState<"pick" | "create">("pick");
   const [selectedId, setSelectedId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newCode, setNewCode] = useState("");
+  const [newHours, setNewHours] = useState("5");
+  const [isElective, setIsElective] = useState(false);
+  const [applyAll, setApplyAll] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const reload = () => {
-    api.admin.sectionSubjects(sectionId).then(setSubjects).catch(() => {});
-  };
+  const reload = () => api.admin.sectionSubjects(sectionId).then(setSubjects).catch(() => {});
 
-  useEffect(() => {
-    api.admin.subjects().then(setAllSubjects).catch(() => {});
-  }, []);
+  useEffect(() => { api.admin.subjects().then(setAllSubjects).catch(() => {}); }, []);
 
   const assignedIds = new Set(subjects.map((s) => s.subjectId));
   const available = allSubjects.filter((s) => !assignedIds.has(s.id));
 
+  const autoCode = (name: string) =>
+    name.trim().split(/\s+/).map((w) => w[0]?.toUpperCase() ?? "").join("").slice(0, 6) || name.slice(0, 4).toUpperCase();
+
+  const reset = () => { setAdding(false); setError(""); setSelectedId(""); setNewName(""); setNewCode(""); setNewHours("5"); setIsElective(false); setApplyAll(false); setMode("pick"); };
+
   const add = async () => {
-    if (!selectedId) { setError("Select a subject"); return; }
     setSaving(true); setError("");
-    try { await api.admin.addSectionSubject(sectionId, selectedId); reload(); onUpdated(); setAdding(false); setSelectedId(""); }
-    catch (e: any) { setError(e.message); } finally { setSaving(false); }
+    try {
+      if (applyAll) {
+        // Assign to all sections of the grade
+        const payload = mode === "create"
+          ? { name: newName.trim(), code: newCode.trim() || autoCode(newName), creditHours: parseInt(newHours) || 5, isElective }
+          : { subjectId: selectedId };
+        if (mode === "create" && !newName.trim()) { setError("Subject name is required"); setSaving(false); return; }
+        if (mode === "pick" && !selectedId) { setError("Select a subject"); setSaving(false); return; }
+        await api.admin.assignSubjectToGrade(gradeId, payload);
+        reload(); onUpdated(); reset();
+      } else {
+        // Single section
+        let subjectId = selectedId;
+        if (mode === "create") {
+          if (!newName.trim()) { setError("Subject name is required"); setSaving(false); return; }
+          const created = await api.admin.createSubject({ name: newName.trim(), code: newCode.trim() || autoCode(newName), creditHours: parseInt(newHours) || 5, isElective });
+          subjectId = created.id;
+          setAllSubjects((prev) => [...prev, created]);
+        } else if (!subjectId) { setError("Select a subject"); setSaving(false); return; }
+        await api.admin.addSectionSubject(sectionId, subjectId);
+        reload(); onUpdated(); reset();
+      }
+    } catch (e: any) { setError(e.message); } finally { setSaving(false); }
   };
 
   const remove = async (assignmentId: string) => {
@@ -202,7 +229,7 @@ function SectionSubjectsCard({ sectionId, initialSubjects, onUpdated }: { sectio
           <h2 className="text-sm font-semibold text-gray-700">Subjects &amp; Teachers</h2>
           <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-md">{subjects.length}</span>
         </div>
-        {!adding && available.length > 0 && (
+        {!adding && (
           <button onClick={() => { setAdding(true); setError(""); }}
             className="flex items-center gap-1 text-xs px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
             <Plus className="w-3.5 h-3.5" /> Add Subject
@@ -211,17 +238,57 @@ function SectionSubjectsCard({ sectionId, initialSubjects, onUpdated }: { sectio
       </div>
 
       {adding && (
-        <div className="px-5 py-3 border-b border-gray-100 bg-blue-50/40 flex items-center gap-3 flex-wrap">
-          {error && <span className="text-xs text-rose-600 w-full">{error}</span>}
-          <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}
-            className="flex-1 min-w-0 text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white outline-none focus:ring-2 focus:ring-blue-400">
-            <option value="">Select subject…</option>
-            {available.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}
-          </select>
-          <div className="flex gap-2 shrink-0">
-            <button onClick={() => { setAdding(false); setError(""); setSelectedId(""); }} className="px-3 py-2 text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-            <button onClick={add} disabled={saving} className="px-4 py-2 text-xs bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium">
-              {saving ? "Adding…" : "Add"}
+        <div className="px-5 py-4 border-b border-gray-100 bg-blue-50/30 space-y-3">
+          {/* Mode toggle */}
+          <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg w-fit">
+            <button onClick={() => setMode("pick")} className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${mode === "pick" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+              Pick existing
+            </button>
+            <button onClick={() => setMode("create")} className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${mode === "create" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+              + Create new
+            </button>
+          </div>
+
+          {error && <p className="text-xs text-rose-600">{error}</p>}
+
+          {mode === "pick" ? (
+            <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">Select subject…</option>
+              {available.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}
+              {available.length === 0 && <option disabled>All subjects already assigned</option>}
+            </select>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <div className="col-span-2">
+                <input value={newName} onChange={(e) => { setNewName(e.target.value); if (!newCode) setNewCode(autoCode(e.target.value)); }}
+                  placeholder="Subject name (e.g. Mathematics)"
+                  className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white outline-none focus:ring-2 focus:ring-blue-400" />
+              </div>
+              <input value={newCode} onChange={(e) => setNewCode(e.target.value.toUpperCase())}
+                placeholder="Code (e.g. MATH)"
+                className="text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white outline-none focus:ring-2 focus:ring-blue-400 font-mono" />
+              <input type="number" value={newHours} onChange={(e) => setNewHours(e.target.value)}
+                placeholder="Credit hours"
+                className="text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white outline-none focus:ring-2 focus:ring-blue-400" />
+              <label className="col-span-2 flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={isElective} onChange={(e) => setIsElective(e.target.checked)} className="rounded" />
+                Elective subject (optional / not compulsory)
+              </label>
+            </div>
+          )}
+
+          {/* Apply to whole class */}
+          <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+            <input type="checkbox" checked={applyAll} onChange={(e) => setApplyAll(e.target.checked)} className="rounded" />
+            <span>Apply to <strong>all sections</strong> of this class (not just this section)</span>
+          </label>
+
+          <div className="flex gap-2 justify-end">
+            <button onClick={reset} className="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+            <button onClick={add} disabled={saving}
+              className="px-4 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium">
+              {saving ? "Saving…" : applyAll ? "Add to Whole Class" : "Add to This Section"}
             </button>
           </div>
         </div>
@@ -236,8 +303,8 @@ function SectionSubjectsCard({ sectionId, initialSubjects, onUpdated }: { sectio
       ) : (
         <table className="w-full text-sm">
           <thead><tr className="bg-gray-50">
-            {["Subject", "Code", "Hrs", "Type", "Teacher", ""].map((h) => (
-              <th key={h} className="text-left px-5 py-2.5 text-xs font-medium text-gray-400 uppercase tracking-wide">{h}</th>
+            {["Subject", "Code", "Hrs", "Type", "Teacher", ""].map((col) => (
+              <th key={col} className="text-left px-5 py-2.5 text-xs font-medium text-gray-400 uppercase tracking-wide">{col}</th>
             ))}
           </tr></thead>
           <tbody>
@@ -328,7 +395,7 @@ export default function SectionDetail() {
         </div>
       </div>
 
-      {id && <SectionSubjectsCard sectionId={id} initialSubjects={sec.subjects ?? []} onUpdated={load} />}
+      {id && <SectionSubjectsCard sectionId={id} gradeId={sec.gradeId ?? ""} initialSubjects={sec.subjects ?? []} onUpdated={load} />}
 
       <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">

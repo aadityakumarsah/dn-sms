@@ -9,25 +9,56 @@ import { api } from "@/lib/api";
 // ─── Feature definitions ───────────────────────────────────────────────────────
 
 export const ALL_FEATURES: { key: string; label: string; category: string }[] = [
-  { key: "student_staff_mgmt",    label: "Student and Staff Management",   category: "Core" },
-  { key: "notifications",         label: "Notifications",                  category: "Core" },
-  { key: "calendar_routine",      label: "Calendar and Routine",           category: "Core" },
-  { key: "homework_mgmt",         label: "Homework Management",            category: "Academics" },
-  { key: "exams_ledger",          label: "Exams and Ledger",               category: "Academics" },
-  { key: "attendance_leave",      label: "Attendance and Leave Notes",     category: "Academics" },
-  { key: "reading_course_plan",   label: "Reading Materials and Course Plan", category: "Academics" },
-  { key: "online_class",          label: "Online Class and Staff Meeting", category: "Academics" },
-  { key: "billing_finance",       label: "Billing and Finance",            category: "Finance" },
-  { key: "teacher_evaluation",    label: "Teacher Evaluation and Analytics", category: "Analytics" },
-  { key: "student_evaluation",    label: "Student Evaluation CAS & Record", category: "Analytics" },
-  { key: "library_mgmt",          label: "Library Management",             category: "Operations" },
-  { key: "document_mgmt",         label: "Document Management",            category: "Operations" },
-  { key: "lunch_canteen",         label: "Lunch & Canteen",                category: "Operations" },
-  { key: "dedicated_support",     label: "Dedicated Support",              category: "Support" },
-  { key: "chat_system",           label: "Chat System",                    category: "Communication" },
-  { key: "inventory_payroll",     label: "Inventory, Payroll & Survey",    category: "Operations" },
-  { key: "infirmary_sca",         label: "Infirmary & SCA Logo",           category: "Operations" },
-  { key: "mobile_app",            label: "Mobile App (School's Branding)", category: "Premium" },
+  // ── Overview ────────────────────────────────────────────────────────────────
+  { key: "calendar_routine",      label: "Calendar",                        category: "Overview" },
+
+  // ── Admissions ───────────────────────────────────────────────────────────────
+  { key: "admissions",            label: "Applications & Admissions",       category: "Admissions" },
+  { key: "academic_promotion",    label: "Academic Promotion",              category: "Admissions" },
+
+  // ── People ───────────────────────────────────────────────────────────────────
+  { key: "students",              label: "Students",                        category: "People" },
+  { key: "teachers",              label: "Teachers",                        category: "People" },
+  { key: "staff_mgmt",            label: "Staff Management",                category: "People" },
+
+  // ── Academics ────────────────────────────────────────────────────────────────
+  { key: "classes_sections",      label: "Classes & Sections",              category: "Academics" },
+  { key: "section_mgmt",          label: "Section Management",              category: "Academics" },
+  { key: "subjects_mgmt",         label: "Subjects",                        category: "Academics" },
+  { key: "departments",           label: "Departments",                     category: "Academics" },
+  { key: "attendance_leave",      label: "Attendance & Leave Notes",        category: "Academics" },
+  { key: "exams_ledger",          label: "Examinations & Ledger",           category: "Academics" },
+
+  // ── Operations ───────────────────────────────────────────────────────────────
+  { key: "transport",             label: "Transport",                       category: "Operations" },
+
+  // ── Finance ───────────────────────────────────────────────────────────────────
+  { key: "billing_finance",       label: "Fee Management & Billing",        category: "Finance" },
+
+  // ── Library ───────────────────────────────────────────────────────────────────
+  { key: "library_mgmt",          label: "Library (Book Catalog)",          category: "Library" },
+
+  // ── Communication ─────────────────────────────────────────────────────────────
+  { key: "notifications",         label: "Notices & Notifications",         category: "Communication" },
+  { key: "chat_system",           label: "Chat System",                     category: "Communication" },
+
+  // ── Administration ────────────────────────────────────────────────────────────
+  { key: "reports",               label: "Reports & Analytics",             category: "Administration" },
+
+  // ── Advanced / Add-ons ────────────────────────────────────────────────────────
+  { key: "homework_mgmt",         label: "Homework Management",             category: "Add-ons" },
+  { key: "online_class",          label: "Online Class & Staff Meeting",    category: "Add-ons" },
+  { key: "reading_course_plan",   label: "Reading Materials & Course Plan", category: "Add-ons" },
+  { key: "teacher_evaluation",    label: "Teacher Evaluation & Analytics",  category: "Add-ons" },
+  { key: "student_evaluation",    label: "Student Evaluation (CAS)",        category: "Add-ons" },
+  { key: "document_mgmt",         label: "Document Management",             category: "Add-ons" },
+  { key: "lunch_canteen",         label: "Lunch & Canteen",                 category: "Add-ons" },
+  { key: "inventory_payroll",     label: "Inventory, Payroll & Survey",     category: "Add-ons" },
+  { key: "infirmary_sca",         label: "Infirmary & SCA Logo",            category: "Add-ons" },
+
+  // ── Premium ───────────────────────────────────────────────────────────────────
+  { key: "dedicated_support",     label: "Dedicated Support",               category: "Premium" },
+  { key: "mobile_app",            label: "Mobile App (School's Branding)",  category: "Premium" },
 ];
 
 const PLAN_COLORS = [

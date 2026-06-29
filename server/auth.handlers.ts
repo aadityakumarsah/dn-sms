@@ -425,8 +425,26 @@ const FEATURE_LABEL_TO_KEY: Record<string, string> = {
   "mobile app (school's branding)": "mobile_app",
 };
 
+// Old broad keys expand into the new granular nav-item keys for backward compat.
+const LEGACY_KEY_EXPANSION: Record<string, string[]> = {
+  student_staff_mgmt: ["students", "teachers", "staff_mgmt", "classes_sections", "section_mgmt", "subjects_mgmt", "departments", "admissions", "academic_promotion"],
+  calendar_routine:   ["calendar_routine"],
+  attendance_leave:   ["attendance_leave"],
+  exams_ledger:       ["exams_ledger"],
+  billing_finance:    ["billing_finance"],
+  library_mgmt:       ["library_mgmt"],
+  notifications:      ["notifications"],
+  reports:            ["reports"],
+};
+
 function normalizeFeatures(raw: string[]): string[] {
-  return raw.map((f) => FEATURE_LABEL_TO_KEY[f.toLowerCase()] ?? f);
+  const keys = raw.map((f) => FEATURE_LABEL_TO_KEY[f.toLowerCase()] ?? f);
+  const expanded = new Set<string>();
+  for (const k of keys) {
+    expanded.add(k);
+    for (const g of LEGACY_KEY_EXPANSION[k] ?? []) expanded.add(g);
+  }
+  return [...expanded];
 }
 
 /**

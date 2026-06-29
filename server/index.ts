@@ -2253,6 +2253,48 @@ async function createSubject(req: Request, h: Headers): Promise<Response> {
   return json(subject, 201, h);
 }
 
+async function deleteSubject(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const subject = await prisma.subject.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!subject) return err("Subject not found", 404, h);
+  await prisma.subject.delete({ where: { id } });
+  return json({ ok: true }, 200, h);
+}
+
+// Assign a subject to every section of a grade (and optionally create the subject)
+async function assignSubjectToGrade(req: Request, h: Headers, gradeId: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
+  const grade = await prisma.grade.findFirst({ where: { id: gradeId, schoolId: u.schoolId }, include: { sections: true } });
+  if (!grade) return err("Grade not found", 404, h);
+  const body = await req.json().catch(() => null);
+
+  let subjectId: string = body?.subjectId;
+  // If no subjectId provided, create a new subject from name+code
+  if (!subjectId) {
+    if (!body?.name || !body?.code) return err("subjectId or name+code required", 400, h);
+    const existing = await prisma.subject.findFirst({ where: { schoolId: u.schoolId, code: body.code } });
+    if (existing) {
+      subjectId = existing.id;
+    } else {
+      const s = await prisma.subject.create({ data: { schoolId: u.schoolId, name: body.name, code: body.code, creditHours: body.creditHours ?? 5, isElective: body.isElective ?? false } });
+      subjectId = s.id;
+    }
+  }
+
+  // Assign to all sections (skip already assigned)
+  const results = await Promise.allSettled(grade.sections.map((sec) =>
+    prisma.subjectAssignment.upsert({
+      where: { sectionId_subjectId: { sectionId: sec.id, subjectId } },
+      create: { sectionId: sec.id, subjectId },
+      update: {},
+    })
+  ));
+  const assigned = results.filter((r) => r.status === "fulfilled").length;
+  return json({ ok: true, assigned, total: grade.sections.length }, 200, h);
+}
+
 async function getSchoolSettings(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
   if (!u || u.role !== "admin") return err("Unauthorized", 401, h);
@@ -4831,6 +4873,10 @@ Bun.serve({
       if (req.method === "GET") return getSubjects(req, h);
       if (req.method === "POST") return createSubject(req, h);
     }
+    const subjectMatch = p.match(/^\/api\/admin\/subjects\/([^/]+)$/);
+    if (subjectMatch && req.method === "DELETE") return deleteSubject(req, h, subjectMatch[1]);
+    const gradeSubjectsMatch = p.match(/^\/api\/admin\/grades\/([^/]+)\/subjects$/);
+    if (gradeSubjectsMatch && req.method === "POST") return assignSubjectToGrade(req, h, gradeSubjectsMatch[1]);
 
     // Library
     if (p === "/api/admin/library/books") {

@@ -290,6 +290,8 @@ export const api = {
     // Subjects
     subjects: () => request<any[]>("/api/admin/subjects"),
     createSubject: (data: Record<string, unknown>) => request<any>("/api/admin/subjects", { method: "POST", body: JSON.stringify(data) }),
+    deleteSubject: (id: string) => request<any>(`/api/admin/subjects/${id}`, { method: "DELETE" }),
+    assignSubjectToGrade: (gradeId: string, data: Record<string, unknown>) => request<any>(`/api/admin/grades/${gradeId}/subjects`, { method: "POST", body: JSON.stringify(data) }),
 
     // Library
     libraryBooks: (p?: { search?: string; category?: string; page?: number }) => {
