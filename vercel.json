@@ -1,4 +1,5 @@
 {
+  "installCommand": "cd client && bun install",
   "buildCommand": "cd client && bun run build.ts",
   "outputDirectory": "client/dist",
   "headers": [
