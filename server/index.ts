@@ -14,7 +14,9 @@ import { hashPassword } from "./auth.utils.ts";
 
 const adapter = new PrismaPg({
   connectionString: process.env.DATABASE_URL!,
-  max: 10, // cap pool at 10 connections — prevents DB exhaustion under load
+  max: 5,
+  idleTimeoutMillis: 10_000,   // discard idle connections after 10 s (before Supabase PgBouncer drops them at ~30 s)
+  connectionTimeoutMillis: 8_000, // fail fast if a new connection can't be established in 8 s
 });
 const prisma = new PrismaClient({ adapter });
 
@@ -2262,6 +2264,97 @@ async function deleteSubject(req: Request, h: Headers, id: string): Promise<Resp
   return json({ ok: true }, 200, h);
 }
 
+// GET /api/admin/subjects/:id — subject detail with schedule + teacher assignments
+async function getSubjectDetail(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const subject = await prisma.subject.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!subject) return err("Not found", 404, h);
+
+  const [slots, teacherAssignments, sectionAssignments] = await Promise.all([
+    prisma.timetableSlot.findMany({
+      where: { subjectId: id, section: { grade: { schoolId: u.schoolId } } },
+      include: {
+        section: { include: { grade: true } },
+        teacher: { include: { user: { include: { profile: true } } } },
+      },
+      orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+    }),
+    prisma.teacherSubjectAssignment.findMany({
+      where: { subjectId: id, teacher: { school: { id: u.schoolId } } },
+      include: {
+        teacher: { include: { user: { include: { profile: true } } } },
+        section: { include: { grade: true } },
+      },
+    }),
+    prisma.subjectAssignment.findMany({
+      where: { subjectId: id, section: { grade: { schoolId: u.schoolId } } },
+      include: { section: { include: { grade: true } } },
+    }),
+  ]);
+
+  const teacherName = (t: any) => t.user.profile
+    ? `${t.user.profile.firstName} ${t.user.profile.lastName}`.trim()
+    : t.user.email;
+
+  return json({
+    ...subject,
+    slots: slots.map((s) => ({
+      id: s.id, dayOfWeek: s.dayOfWeek, periodNumber: s.periodNumber,
+      startTime: s.startTime, endTime: s.endTime, shift: s.shift, roomNo: s.roomNo,
+      sectionId: s.sectionId,
+      sectionName: `${s.section.grade.name} ${s.section.name}`,
+      gradeId: s.section.gradeId,
+      teacherId: s.teacherId,
+      teacherName: s.teacher ? teacherName(s.teacher) : null,
+    })),
+    teacherAssignments: teacherAssignments.map((a) => ({
+      id: a.id, teacherId: a.teacherId,
+      teacherName: teacherName(a.teacher),
+      sectionId: a.sectionId,
+      sectionName: a.section ? `${a.section.grade.name} ${a.section.name}` : null,
+    })),
+    sections: sectionAssignments.map((a) => ({
+      assignmentId: a.id, sectionId: a.sectionId,
+      sectionName: `${a.section.grade.name} ${a.section.name}`,
+      gradeId: a.section.gradeId,
+    })),
+  }, 200, h);
+}
+
+// GET /api/admin/schedule/teachers-free?dayOfWeek=1&periodNumber=2&shift=DAY
+// Returns all teachers + whether they have a conflict at that slot
+async function getTeachersAvailability(req: Request, h: Headers, url: URL): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const day = Number(url.searchParams.get("dayOfWeek") ?? -1);
+  const period = Number(url.searchParams.get("periodNumber") ?? -1);
+  const shift = url.searchParams.get("shift") ?? "DAY";
+  if (day < 0 || period < 0) return err("dayOfWeek and periodNumber required", 400, h);
+
+  const [teachers, busySlots] = await Promise.all([
+    prisma.teacher.findMany({
+      where: { schoolId: u.schoolId, user: { status: "ACTIVE" } },
+      include: { user: { include: { profile: true } } },
+    }),
+    prisma.timetableSlot.findMany({
+      where: { dayOfWeek: day, periodNumber: period, shift: shift === "MORNING" ? "MORNING" : "DAY", section: { grade: { schoolId: u.schoolId } } },
+      select: { teacherId: true },
+    }),
+  ]);
+
+  const busyTeacherIds = new Set(busySlots.map((s) => s.teacherId).filter(Boolean));
+  const teacherName = (t: any) => t.user.profile
+    ? `${t.user.profile.firstName} ${t.user.profile.lastName}`.trim()
+    : t.user.email;
+
+  return json(teachers.map((t) => ({
+    id: t.id,
+    name: teacherName(t),
+    isBusy: busyTeacherIds.has(t.id),
+  })), 200, h);
+}
+
 // Assign a subject to every section of a grade (and optionally create the subject)
 async function assignSubjectToGrade(req: Request, h: Headers, gradeId: string): Promise<Response> {
   const u = await authSchool(req);
@@ -3828,6 +3921,322 @@ async function deleteRoutineSlot(req: Request, h: Headers, id: string): Promise<
   return json({ ok: true }, 200, h);
 }
 
+// ─── Schedule Manager (Staff) ─────────────────────────────────────────────────
+
+async function authScheduleManager(req: Request): Promise<{ id: string; schoolId: string; role: string } | null> {
+  try {
+    const u = await authSchool(req);
+    if (!u) return null;
+    if (u.role === "admin") return u; // admin always allowed
+    if (u.role !== "staff") return null;
+    const staff = await prisma.staff.findFirst({ where: { userId: u.id } });
+    if (!staff) return null;
+    const desig = staff.designation?.toLowerCase() ?? "";
+    if (!desig.includes("schedule")) return null;
+    return u;
+  } catch {
+    return null;
+  }
+}
+
+async function getScheduleResources(req: Request, h: Headers): Promise<Response> {
+  const u = await authScheduleManager(req);
+  if (!u) return err("Unauthorized — Schedule Manager role required", 403, h);
+  const [grades, subjects, teachers] = await Promise.all([
+    prisma.grade.findMany({
+      where: { schoolId: u.schoolId },
+      include: { sections: true },
+      orderBy: { gradeNumber: "asc" },
+    }),
+    prisma.subject.findMany({ where: { schoolId: u.schoolId }, orderBy: { name: "asc" } }),
+    prisma.teacher.findMany({
+      where: { user: { schoolId: u.schoolId } },
+      include: { user: { include: { profile: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+  ]);
+  const teacherName = (t: any) => t.user.profile
+    ? `${t.user.profile.firstName} ${t.user.profile.lastName}`.trim()
+    : t.user.email;
+  return json({
+    sections: grades.flatMap((g) => g.sections.map((s) => ({
+      id: s.id, name: `${g.name} — Section ${s.name}`, gradeName: g.name, sectionName: s.name, gradeId: g.id,
+    }))),
+    subjects: subjects.map((s) => ({ id: s.id, name: s.name, code: s.code, isElective: s.isElective })),
+    teachers: teachers.map((t) => ({ id: t.id, name: teacherName(t) })),
+  }, 200, h);
+}
+
+async function getScheduleSlots(req: Request, h: Headers): Promise<Response> {
+  const u = await authScheduleManager(req);
+  if (!u) return err("Unauthorized", 403, h);
+  const slots = await prisma.timetableSlot.findMany({
+    where: { section: { grade: { schoolId: u.schoolId } } },
+    include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
+    orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+  });
+  const teacherName = (t: any) => t.user.profile
+    ? `${t.user.profile.firstName} ${t.user.profile.lastName}`.trim()
+    : t.user.email;
+  return json(slots.map((s) => ({
+    id: s.id, sectionId: s.sectionId, subjectId: s.subjectId, teacherId: s.teacherId,
+    sectionName: `${s.section.grade.name} — Section ${s.section.name}`,
+    gradeName: s.section.grade.name, gradeId: s.section.gradeId,
+    subjectName: s.subject.name, subjectCode: s.subject.code,
+    teacherName: s.teacher ? teacherName(s.teacher) : null,
+    dayOfWeek: s.dayOfWeek, periodNumber: s.periodNumber,
+    startTime: s.startTime, endTime: s.endTime,
+    shift: s.shift, roomNo: s.roomNo,
+  })), 200, h);
+}
+
+async function createScheduleSlot(req: Request, h: Headers): Promise<Response> {
+  const u = await authScheduleManager(req);
+  if (!u) return err("Unauthorized", 403, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.sectionId || !body?.subjectId || body?.dayOfWeek === undefined || body?.periodNumber === undefined || !body?.startTime || !body?.endTime)
+    return err("sectionId, subjectId, dayOfWeek, periodNumber, startTime, endTime required", 400, h);
+  const timetableId = await ensureActiveTimetable(u.schoolId);
+  if (!timetableId) return err("No active academic year. Ask the admin to create one first.", 400, h);
+  try {
+    const slot = await prisma.timetableSlot.create({ data: {
+      timetableId, sectionId: body.sectionId, subjectId: body.subjectId,
+      teacherId: body.teacherId || null,
+      dayOfWeek: Number(body.dayOfWeek), periodNumber: Number(body.periodNumber),
+      startTime: body.startTime, endTime: body.endTime,
+      roomNo: body.roomNo || null,
+      shift: body.shift === "MORNING" ? "MORNING" : "DAY",
+    }});
+    return json(slot, 201, h);
+  } catch (e: any) {
+    if (e?.code === "P2002") return err("A slot already exists for this section/day/period/shift.", 409, h);
+    return err("Failed to create slot", 400, h);
+  }
+}
+
+async function deleteScheduleSlot(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authScheduleManager(req);
+  if (!u) return err("Unauthorized", 403, h);
+  const slot = await prisma.timetableSlot.findFirst({ where: { id, section: { grade: { schoolId: u.schoolId } } } });
+  if (!slot) return err("Not found", 404, h);
+  await prisma.timetableSlot.delete({ where: { id } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── Duty Roster (Schedule Manager) ──────────────────────────────────────────
+// Uses a simple JSON column on a DutySlot model — but since we don't want a
+// migration, we store duties as TimetableSlot rows with a special subjectId
+// sentinel OR we use a separate in-memory/JSON approach. Instead we'll just
+// keep a lightweight duties table backed by a JSON file per school.
+// Actually: store duties as a special timetable slot where subjectId = null
+// and we use the `materials` field as JSON metadata (type, description).
+// No schema migration needed.
+
+async function getDutySlots(req: Request, h: Headers): Promise<Response> {
+  const u = await authScheduleManager(req);
+  if (!u) return err("Unauthorized — Schedule Manager role required", 403, h);
+  // Duties are stored as timetable slots whose subject has code "__duty__"
+  const dutySubject = await prisma.subject.findFirst({ where: { schoolId: u.schoolId, code: "__duty__" } });
+  if (!dutySubject) return json([], 200, h);
+  const duties = await prisma.timetableSlot.findMany({
+    where: { subjectId: dutySubject.id, section: { grade: { schoolId: u.schoolId } } },
+    include: { teacher: { include: { user: { include: { profile: true } } } }, section: { include: { grade: true } } },
+    orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+  });
+  const teacherName = (t: any) => t?.user?.profile
+    ? `${t.user.profile.firstName} ${t.user.profile.lastName}`.trim()
+    : t?.user?.email ?? null;
+  return json(duties.map((d) => {
+    let meta: any = {};
+    try { meta = JSON.parse(d.materials ?? "{}"); } catch { /**/ }
+    return {
+      id: d.id, dayOfWeek: d.dayOfWeek, periodNumber: d.periodNumber,
+      startTime: d.startTime, endTime: d.endTime, shift: d.shift,
+      teacherId: d.teacherId, teacherName: d.teacher ? teacherName(d.teacher) : null,
+      roomNo: d.roomNo, dutyType: meta.dutyType ?? "General Duty", description: meta.description ?? "",
+    };
+  }), 200, h);
+}
+
+async function createDutySlot(req: Request, h: Headers): Promise<Response> {
+  const u = await authScheduleManager(req);
+  if (!u) return err("Unauthorized — Schedule Manager role required", 403, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.dayOfWeek === undefined || !body?.startTime || !body?.dutyType)
+    return err("dayOfWeek, startTime, dutyType required", 400, h);
+  // Ensure sentinel subject exists
+  let dutySubject = await prisma.subject.findFirst({ where: { schoolId: u.schoolId, code: "__duty__" } });
+  if (!dutySubject) dutySubject = await prisma.subject.create({ data: { schoolId: u.schoolId, name: "Duty / Supervision", code: "__duty__", creditHours: 0 } });
+  // Need a section to attach the slot — use first section of school
+  let section = await prisma.section.findFirst({ where: { grade: { schoolId: u.schoolId } } });
+  if (!section) return err("No classes/sections found. Create a class first.", 400, h);
+  const timetableId = await ensureActiveTimetable(u.schoolId);
+  if (!timetableId) return err("No active academic year. Ask admin to create one.", 400, h);
+  try {
+    const slot = await prisma.timetableSlot.create({ data: {
+      timetableId, sectionId: section.id, subjectId: dutySubject.id,
+      teacherId: body.teacherId || null,
+      dayOfWeek: Number(body.dayOfWeek), periodNumber: Number(body.periodNumber ?? 0),
+      startTime: body.startTime, endTime: body.endTime ?? body.startTime,
+      roomNo: body.roomNo || null, shift: body.shift === "MORNING" ? "MORNING" : "DAY",
+      materials: JSON.stringify({ dutyType: body.dutyType, description: body.description ?? "" }),
+    }});
+    return json(slot, 201, h);
+  } catch (e: any) {
+    if (e?.code === "P2002") return err("Duplicate duty slot.", 409, h);
+    return err("Failed to create duty slot", 400, h);
+  }
+}
+
+async function deleteDutySlot(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authScheduleManager(req);
+  if (!u) return err("Unauthorized", 403, h);
+  await prisma.timetableSlot.deleteMany({ where: { id, section: { grade: { schoolId: u.schoolId } } } });
+  return json({ ok: true }, 200, h);
+}
+
+// ─── DI — Discipline In-charge ────────────────────────────────────────────────
+
+async function authDI(req: Request): Promise<{ id: string; schoolId: string; role: string } | null> {
+  try {
+    const u = await authSchool(req);
+    if (!u) return null;
+    if (u.role === "admin") return u;
+    if (u.role !== "staff") return null;
+    const staff = await prisma.staff.findFirst({ where: { userId: u.id } });
+    if (!staff) return null;
+    const desig = staff.designation?.toLowerCase() ?? "";
+    if (!desig.includes("di") && desig !== "di") return null;
+    return u;
+  } catch { return null; }
+}
+
+async function getDisciplineRecords(req: Request, h: Headers, url: URL): Promise<Response> {
+  try {
+    const u = await authDI(req);
+    if (!u) return err("Unauthorized — DI role required", 403, h);
+    const studentId = url.searchParams.get("studentId") ?? undefined;
+    const where: any = { schoolId: u.schoolId };
+    if (studentId) where.studentId = studentId;
+    const records = await prisma.disciplineRecord.findMany({
+      where,
+      include: {
+        student: { include: { user: { include: { profile: true } }, enrollments: { where: { status: "ACTIVE" }, include: { section: { include: { grade: true } } }, take: 1 } } },
+        reportedBy: { include: { profile: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+    const name = (p: any) => p ? `${p.firstName} ${p.lastName}`.trim() : null;
+    return json(records.map((r) => ({
+      id: r.id,
+      studentId: r.studentId,
+      studentName: name(r.student.user.profile) ?? r.student.user.email,
+      studentAdmissionNo: r.student.admissionNo,
+      className: r.student.enrollments[0]
+        ? `${r.student.enrollments[0].section.grade.name} — ${r.student.enrollments[0].section.name}`
+        : null,
+      reportedBy: name(r.reportedBy.profile) ?? r.reportedBy.email,
+      category: r.category,
+      description: r.description,
+      severity: r.severity,
+      actionTaken: r.actionTaken,
+      parentNotified: r.parentNotified,
+      createdAt: r.createdAt,
+    })), 200, h);
+  } catch (e) {
+    console.error("getDisciplineRecords error:", e);
+    return err(`Server error: ${String(e)}`, 500, h);
+  }
+}
+
+async function createDisciplineRecord(req: Request, h: Headers): Promise<Response> {
+  const u = await authDI(req);
+  if (!u) return err("Unauthorized — DI role required", 403, h);
+  const body = await req.json().catch(() => null);
+  if (!body?.studentId || !body?.category || !body?.description)
+    return err("studentId, category, description required", 400, h);
+  const validCategories = ["NAILS","HAIR","UNIFORM","ID_CARD","MOBILE_PHONE","PUNCTUALITY","BEHAVIOR","CLEANLINESS","OTHER"];
+  if (!validCategories.includes(body.category)) return err("Invalid category", 400, h);
+  const student = await prisma.student.findFirst({ where: { id: body.studentId, schoolId: u.schoolId } });
+  if (!student) return err("Student not found", 404, h);
+  const record = await prisma.disciplineRecord.create({
+    data: {
+      schoolId: u.schoolId,
+      studentId: body.studentId,
+      reportedById: u.id,
+      category: body.category,
+      description: body.description,
+      severity: ["MINOR","MODERATE","SERIOUS"].includes(body.severity) ? body.severity : "MINOR",
+      actionTaken: body.actionTaken || null,
+      parentNotified: false,
+    },
+  });
+  return json(record, 201, h);
+}
+
+async function updateDisciplineRecord(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authDI(req);
+  if (!u) return err("Unauthorized — DI role required", 403, h);
+  const body = await req.json().catch(() => null);
+  const existing = await prisma.disciplineRecord.findFirst({ where: { id, schoolId: u.schoolId } });
+  if (!existing) return err("Record not found", 404, h);
+  const updated = await prisma.disciplineRecord.update({
+    where: { id },
+    data: {
+      actionTaken: body?.actionTaken ?? existing.actionTaken,
+      parentNotified: body?.parentNotified ?? existing.parentNotified,
+      severity: body?.severity ?? existing.severity,
+    },
+  });
+  return json(updated, 200, h);
+}
+
+async function deleteDisciplineRecord(req: Request, h: Headers, id: string): Promise<Response> {
+  const u = await authDI(req);
+  if (!u) return err("Unauthorized — DI role required", 403, h);
+  await prisma.disciplineRecord.deleteMany({ where: { id, schoolId: u.schoolId } });
+  return json({ ok: true }, 200, h);
+}
+
+async function getDIStudents(req: Request, h: Headers, url: URL): Promise<Response> {
+  try {
+    const u = await authDI(req);
+    if (!u) return err("Unauthorized — DI role required", 403, h);
+    const search = url.searchParams.get("search") ?? "";
+    const students = await prisma.student.findMany({
+      where: {
+        schoolId: u.schoolId,
+        ...(search ? {
+          OR: [
+            { admissionNo: { contains: search, mode: "insensitive" } },
+            { user: { profile: { OR: [{ firstName: { contains: search, mode: "insensitive" } }, { lastName: { contains: search, mode: "insensitive" } }] } } },
+          ],
+        } : {}),
+      },
+      include: {
+        user: { include: { profile: true } },
+        enrollments: { where: { status: "ACTIVE" }, include: { section: { include: { grade: true } } }, take: 1 },
+      },
+      take: 50,
+      orderBy: { createdAt: "desc" },
+    });
+    const name = (p: any) => p ? `${p.firstName} ${p.lastName}`.trim() : null;
+    return json(students.map((s) => ({
+      id: s.id,
+      name: name(s.user.profile) ?? s.user.email,
+      admissionNo: s.admissionNo,
+      className: s.enrollments[0]
+        ? `${s.enrollments[0].section.grade.name} — ${s.enrollments[0].section.name}`
+        : null,
+      avatar: s.user.profile?.avatar ?? null,
+    })), 200, h);
+  } catch (e) {
+    console.error("getDIStudents error:", e);
+    return err(`Server error: ${String(e)}`, 500, h);
+  }
+}
+
 // Shared slot → JSON shape for the portal routine endpoints (includes section name).
 function routineSlotJson(s: any) {
   return {
@@ -4874,7 +5283,11 @@ Bun.serve({
       if (req.method === "POST") return createSubject(req, h);
     }
     const subjectMatch = p.match(/^\/api\/admin\/subjects\/([^/]+)$/);
-    if (subjectMatch && req.method === "DELETE") return deleteSubject(req, h, subjectMatch[1]);
+    if (subjectMatch) {
+      if (req.method === "GET") return getSubjectDetail(req, h, subjectMatch[1]);
+      if (req.method === "DELETE") return deleteSubject(req, h, subjectMatch[1]);
+    }
+    if (p === "/api/admin/schedule/teachers-free") return getTeachersAvailability(req, h, url);
     const gradeSubjectsMatch = p.match(/^\/api\/admin\/grades\/([^/]+)\/subjects$/);
     if (gradeSubjectsMatch && req.method === "POST") return assignSubjectToGrade(req, h, gradeSubjectsMatch[1]);
 
@@ -4942,6 +5355,34 @@ Bun.serve({
     }
     const routineMatch = p.match(/^\/api\/admin\/routine\/([^/]+)$/);
     if (routineMatch && req.method === "DELETE") return deleteRoutineSlot(req, h, routineMatch[1]);
+
+    // Staff / Schedule Manager routes
+    if (p === "/api/staff/schedule/resources") return getScheduleResources(req, h);
+    if (p === "/api/staff/schedule/teachers-free") return getTeachersAvailability(req, h, url);
+    if (p === "/api/staff/schedule/duties") {
+      if (req.method === "GET") return getDutySlots(req, h);
+      if (req.method === "POST") return createDutySlot(req, h);
+    }
+    const staffDutyMatch = p.match(/^\/api\/staff\/schedule\/duties\/([^/]+)$/);
+    if (staffDutyMatch && req.method === "DELETE") return deleteDutySlot(req, h, staffDutyMatch[1]);
+    if (p === "/api/staff/schedule") {
+      if (req.method === "GET") return getScheduleSlots(req, h);
+      if (req.method === "POST") return createScheduleSlot(req, h);
+    }
+    const staffSlotMatch = p.match(/^\/api\/staff\/schedule\/([^/]+)$/);
+    if (staffSlotMatch && req.method === "DELETE") return deleteScheduleSlot(req, h, staffSlotMatch[1]);
+
+    // DI — Discipline In-charge
+    if (p === "/api/staff/discipline/students") return getDIStudents(req, h, url);
+    if (p === "/api/staff/discipline") {
+      if (req.method === "GET") return getDisciplineRecords(req, h, url);
+      if (req.method === "POST") return createDisciplineRecord(req, h);
+    }
+    const diMatch = p.match(/^\/api\/staff\/discipline\/([^/]+)$/);
+    if (diMatch) {
+      if (req.method === "PATCH") return updateDisciplineRecord(req, h, diMatch[1]);
+      if (req.method === "DELETE") return deleteDisciplineRecord(req, h, diMatch[1]);
+    }
 
     // Homework
     if (p === "/api/admin/homework") {
@@ -5112,9 +5553,10 @@ Bun.serve({
     return json({ error: "Not found" }, 404, h);
     } catch (e) {
       console.error("Unhandled request error:", e);
-      return new Response(JSON.stringify({ error: "Internal server error" }), {
+      const h2 = cors(req);
+      return new Response(JSON.stringify({ error: "Internal server error", detail: String(e) }), {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: h2,
       });
     }
   },

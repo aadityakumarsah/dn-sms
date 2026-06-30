@@ -172,7 +172,12 @@ export default function EditDrawer({ userId, onClose, onSaved }: { userId: strin
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <Field label="Employee ID"><TextInput value={roleData.employeeId ?? ""} onChange={(e) => sr("employeeId", e.target.value)} /></Field>
-                    <Field label="Designation"><TextInput value={roleData.designation ?? ""} onChange={(e) => sr("designation", e.target.value)} /></Field>
+                    <Field label="Designation">
+                      <Select value={roleData.designation ?? ""} onChange={(e) => sr("designation", e.target.value)}>
+                        <option value="">— Select —</option>
+                        {["Accountant","Librarian","Cleaner","Security Guard","Receptionist","Lab Assistant","Office Assistant","Driver","Helper","Cook","Gardener","IT Support","Nurse","Store Keeper","Schedule Manager","DI"].map((d) => <option key={d} value={d}>{d}</option>)}
+                      </Select>
+                    </Field>
                   </div>
                   <Field label="Department">
                     <Select value={roleData.departmentId ?? ""} onChange={(e) => sr("departmentId", e.target.value)}>

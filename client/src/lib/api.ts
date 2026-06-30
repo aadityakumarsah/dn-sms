@@ -291,6 +291,9 @@ export const api = {
     subjects: () => request<any[]>("/api/admin/subjects"),
     createSubject: (data: Record<string, unknown>) => request<any>("/api/admin/subjects", { method: "POST", body: JSON.stringify(data) }),
     deleteSubject: (id: string) => request<any>(`/api/admin/subjects/${id}`, { method: "DELETE" }),
+    subjectDetail: (id: string) => request<any>(`/api/admin/subjects/${id}`),
+    teachersAvailability: (dayOfWeek: number, periodNumber: number, shift: string) =>
+      request<any[]>(`/api/admin/schedule/teachers-free?dayOfWeek=${dayOfWeek}&periodNumber=${periodNumber}&shift=${shift}`),
     assignSubjectToGrade: (gradeId: string, data: Record<string, unknown>) => request<any>(`/api/admin/grades/${gradeId}/subjects`, { method: "POST", body: JSON.stringify(data) }),
 
     // Library
@@ -453,6 +456,24 @@ export const api = {
     exams: () => request<any[]>("/api/student/exams"),
   },
 
+  di: {
+    students: (search?: string) => request<any[]>(`/api/staff/discipline/students${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+    records: (studentId?: string) => request<any[]>(`/api/staff/discipline${studentId ? `?studentId=${studentId}` : ""}`),
+    create: (data: Record<string, unknown>) => request<any>("/api/staff/discipline", { method: "POST", body: JSON.stringify(data) }),
+    update: (id: string, data: Record<string, unknown>) => request<any>(`/api/staff/discipline/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    delete: (id: string) => request<any>(`/api/staff/discipline/${id}`, { method: "DELETE" }),
+  },
+  scheduleManager: {
+    resources: () => request<any>("/api/staff/schedule/resources"),
+    slots: () => request<any[]>("/api/staff/schedule"),
+    createSlot: (data: Record<string, unknown>) => request<any>("/api/staff/schedule", { method: "POST", body: JSON.stringify(data) }),
+    deleteSlot: (id: string) => request<any>(`/api/staff/schedule/${id}`, { method: "DELETE" }),
+    teachersFree: (dayOfWeek: number, periodNumber: number, shift: string) =>
+      request<any[]>(`/api/staff/schedule/teachers-free?dayOfWeek=${dayOfWeek}&periodNumber=${periodNumber}&shift=${shift}`),
+    duties: () => request<any[]>("/api/staff/schedule/duties"),
+    createDuty: (data: Record<string, unknown>) => request<any>("/api/staff/schedule/duties", { method: "POST", body: JSON.stringify(data) }),
+    deleteDuty: (id: string) => request<any>(`/api/staff/schedule/duties/${id}`, { method: "DELETE" }),
+  },
   parent: {
     dashboard: () => request<any>("/api/parent/dashboard"),
     notices: () => request<any[]>("/api/parent/notices"),

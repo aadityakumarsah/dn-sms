@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           localStorage.setItem(USER_KEY, JSON.stringify(refreshed));
         })
       : api.auth.meSchool().then((data) => {
-          const refreshed: User = { id: data.id, name: data.name, email: data.email, role: data.role as UserRole, schoolId: data.schoolId, schoolName: data.schoolName, features: data.features, planSlug: data.planSlug, planName: data.planName, schoolStatus: data.schoolStatus };
+          const refreshed: User = { id: data.id, name: data.name, email: data.email, role: data.role as UserRole, schoolId: data.schoolId, schoolName: data.schoolName, features: data.features, planSlug: data.planSlug, planName: data.planName, schoolStatus: data.schoolStatus, staffDesignation: data.staffDesignation ?? null };
           setUser(refreshed);
           localStorage.setItem(USER_KEY, JSON.stringify(refreshed));
         });

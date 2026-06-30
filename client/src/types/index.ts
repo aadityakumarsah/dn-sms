@@ -18,6 +18,7 @@ export interface User {
   planSlug?: string | null; // e.g. free | basic | pro | enterprise
   planName?: string | null; // human label of the school's plan
   schoolStatus?: string; // ACTIVE | TRIAL | SUSPENDED | PAUSED | INACTIVE
+  staffDesignation?: string | null; // e.g. "Schedule Manager", populated for staff role
 }
 
 export interface School {

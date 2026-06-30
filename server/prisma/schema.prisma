@@ -91,6 +91,7 @@ model School {
   ecaActivities       EcaActivity[]
   notifications       Notification[]
   feeStructures       FeeStructure[]
+  disciplineRecords   DisciplineRecord[]
 }
 
 enum SchoolType {
@@ -196,9 +197,10 @@ model User {
   parent           Parent?
   sentMessages     Message[]    @relation("MessageSender")
   receivedMessages Message[]    @relation("MessageRecipient")
-  noticesCreated   Notice[]
-  auditLogs        AuditLog[]
-  leaveApplications LeaveApplication[]
+  noticesCreated      Notice[]
+  auditLogs           AuditLog[]
+  leaveApplications   LeaveApplication[]
+  disciplineReported  DisciplineRecord[]
 
   @@unique([schoolId, email])
 }
@@ -387,12 +389,48 @@ model Student {
   examResults    ExamResult[]
   feeCollections FeeCollection[]
   parentLinks    ParentStudent[]
-  submissions    AssignmentSubmission[]
-  bookIssues     BookIssue[]
-  assessments    StudentAssessment[]
-  infirmaryVisits InfirmaryVisit[]
+  submissions      AssignmentSubmission[]
+  bookIssues       BookIssue[]
+  assessments      StudentAssessment[]
+  infirmaryVisits  InfirmaryVisit[]
+  disciplineRecords DisciplineRecord[]
 
   @@unique([schoolId, admissionNo])
+}
+
+model DisciplineRecord {
+  id           String             @id @default(cuid())
+  schoolId     String
+  studentId    String
+  reportedById String
+  category     DisciplineCategory
+  description  String
+  severity     DisciplineSeverity @default(MINOR)
+  actionTaken  String?
+  parentNotified Boolean          @default(false)
+  createdAt    DateTime           @default(now())
+
+  school      School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student     Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  reportedBy  User    @relation(fields: [reportedById], references: [id])
+}
+
+enum DisciplineCategory {
+  NAILS
+  HAIR
+  UNIFORM
+  ID_CARD
+  MOBILE_PHONE
+  PUNCTUALITY
+  BEHAVIOR
+  CLEANLINESS
+  OTHER
+}
+
+enum DisciplineSeverity {
+  MINOR
+  MODERATE
+  SERIOUS
 }
 
 enum TransportMode {

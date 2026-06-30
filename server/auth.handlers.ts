@@ -467,6 +467,7 @@ export async function getCurrentUser(
   planSlug: string | null;
   planName: string | null;
   schoolStatus: string;
+  staffDesignation: string | null;
 }> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -478,6 +479,7 @@ export async function getCurrentUser(
           subscription: { select: { plan: { select: { slug: true, name: true, features: true } } } },
         },
       },
+      staff: { select: { designation: true } },
     },
   });
   if (!user) throw new Error("User not found");
@@ -502,5 +504,6 @@ export async function getCurrentUser(
     planSlug: user.school.subscription?.plan?.slug ?? null,
     planName: user.school.subscription?.plan?.name ?? null,
     schoolStatus: user.school.status,
+    staffDesignation: (user as any).staff?.designation ?? null,
   };
 }

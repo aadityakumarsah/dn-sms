@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, CalendarCheck, DollarSign, Package, Settings } from "lucide-react";
+import { LayoutDashboard, Users, CalendarCheck, DollarSign, Package, Settings, CalendarDays, ShieldAlert } from "lucide-react";
 import type { NavSection } from "@/types";
 
 export const staffNav: NavSection[] = [
@@ -21,6 +21,28 @@ export const staffNav: NavSection[] = [
     items: [
       { label: "Inventory", href: "/staff/inventory", icon: Package },
       { label: "Settings", href: "/staff/settings", icon: Settings },
+    ],
+  },
+];
+
+// Extra nav sections injected for Schedule Manager designation
+export const scheduleManagerNav: NavSection[] = [
+  ...staffNav,
+  {
+    section: "Schedule Management",
+    items: [
+      { label: "Class Schedule", href: "/staff/schedule", icon: CalendarDays },
+    ],
+  },
+];
+
+// Extra nav sections injected for DI (Discipline In-charge) designation
+export const diNav: NavSection[] = [
+  ...staffNav,
+  {
+    section: "Discipline",
+    items: [
+      { label: "Discipline Records", href: "/staff/discipline", icon: ShieldAlert },
     ],
   },
 ];

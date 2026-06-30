@@ -1,8 +1,144 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, X, RefreshCw, Users, BookOpen, ChevronDown, ChevronRight, Trash2, Edit3 } from "lucide-react";
+import { Plus, X, RefreshCw, Users, BookOpen, ChevronDown, ChevronRight, Trash2, Edit3, Layers, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+
+// ─── Grade Subjects Panel ──────────────────────────────────────────────────────
+function GradeSubjectsPanel({ gradeId, sections }: { gradeId: string; sections: any[] }) {
+  const [allSubjects, setAllSubjects] = useState<any[]>([]);
+  const [gradeSubjects, setGradeSubjects] = useState<any[]>([]); // subjects in ANY section of this grade
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  // form state
+  const [mode, setMode] = useState<"pick" | "create">("pick");
+  const [selectedId, setSelectedId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newCode, setNewCode] = useState("");
+  const [applyAll, setApplyAll] = useState(true);
+  const [targetSection, setTargetSection] = useState(""); // empty = all
+
+  const autoCode = (n: string) =>
+    n.trim().split(/\s+/).map((w) => w[0]?.toUpperCase() ?? "").join("").slice(0, 6) || n.slice(0, 4).toUpperCase();
+
+  const loadData = () => {
+    setLoading(true);
+    Promise.all([api.admin.subjects(), api.admin.gradesWithSections()])
+      .then(([subs, gradesData]) => {
+        setAllSubjects(subs);
+        // collect unique subjects across all sections of this grade
+        const grade = (gradesData.grades ?? gradesData).find((g: any) => g.id === gradeId);
+        const secIds = new Set(sections.map((s: any) => s.id));
+        // We'll derive grade-level subjects from section detail — for now just show all subjects
+        setGradeSubjects([]);
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { loadData(); }, [gradeId]);
+
+  const handleAdd = async () => {
+    setSaving(true); setError("");
+    try {
+      if (targetSection && !applyAll) {
+        // assign to one specific section
+        const payload = mode === "create"
+          ? { name: newName.trim(), code: newCode.trim() || autoCode(newName), creditHours: 5 }
+          : { subjectId: selectedId };
+        if (mode === "create" && !payload.name) { setError("Subject name is required"); setSaving(false); return; }
+        if (mode === "pick" && !selectedId) { setError("Select a subject"); setSaving(false); return; }
+
+        if (mode === "create") {
+          // create then assign to section
+          const sub = await api.admin.createSubject(payload);
+          await api.admin.addSectionSubject(targetSection, sub.id);
+        } else {
+          await api.admin.addSectionSubject(targetSection, selectedId);
+        }
+      } else {
+        // assign to all sections of the grade
+        const payload: Record<string, unknown> = mode === "create"
+          ? { name: newName.trim(), code: newCode.trim() || autoCode(newName), creditHours: 5 }
+          : { subjectId: selectedId };
+        if (mode === "create" && !payload.name) { setError("Subject name is required"); setSaving(false); return; }
+        if (mode === "pick" && !selectedId) { setError("Select a subject"); setSaving(false); return; }
+        await api.admin.assignSubjectToGrade(gradeId, payload);
+      }
+      // reset
+      setSelectedId(""); setNewName(""); setNewCode("");
+      loadData();
+    } catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      {error && <p className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-xl">{error}</p>}
+
+      {/* Mode tabs */}
+      <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+        {(["pick", "create"] as const).map((m) => (
+          <button key={m} onClick={() => setMode(m)}
+            className={cn("px-3 py-1.5 text-xs font-medium rounded-lg transition-colors",
+              mode === m ? "bg-white shadow-sm text-gray-900" : "text-gray-500 hover:text-gray-700")}>
+            {m === "pick" ? "Pick existing subject" : "+ Create new subject"}
+          </button>
+        ))}
+      </div>
+
+      {/* Input row */}
+      <div className="flex flex-wrap items-end gap-2">
+        {mode === "pick" ? (
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Subject</label>
+            <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}
+              className="text-sm border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400 bg-white min-w-[180px]">
+              <option value="">— select —</option>
+              {allSubjects.map((s: any) => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}
+            </select>
+          </div>
+        ) : (
+          <>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Subject Name</label>
+              <input value={newName} onChange={(e) => { setNewName(e.target.value); if (!newCode) setNewCode(autoCode(e.target.value)); }}
+                placeholder="e.g. Physics" className="text-sm border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400 w-40" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Code</label>
+              <input value={newCode} onChange={(e) => setNewCode(e.target.value.toUpperCase())}
+                placeholder="e.g. PHY" className="text-sm border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400 w-24 font-mono" />
+            </div>
+          </>
+        )}
+
+        {/* Scope selector */}
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Apply to</label>
+          <select
+            value={applyAll ? "__all__" : targetSection}
+            onChange={(e) => { if (e.target.value === "__all__") { setApplyAll(true); setTargetSection(""); } else { setApplyAll(false); setTargetSection(e.target.value); } }}
+            className="text-sm border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400 bg-white min-w-[160px]">
+            <option value="__all__">All sections of this class</option>
+            {sections.map((s: any) => <option key={s.id} value={s.id}>Section {s.name} only</option>)}
+          </select>
+        </div>
+
+        <button onClick={handleAdd} disabled={saving}
+          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium">
+          <Check className="w-3.5 h-3.5" />
+          {saving ? "Adding…" : "Add Subject"}
+        </button>
+      </div>
+
+      <p className="text-xs text-gray-400">
+        Subjects added here appear in each section's detail page. You can also assign teachers per subject from the section page.
+      </p>
+    </div>
+  );
+}
 
 const PERF_CFG: Record<string, { label: string; color: string; dot: string }> = {
   EXCELLENT:    { label: "Excellent",    color: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "bg-emerald-500" },
@@ -222,6 +358,7 @@ export default function Classes() {
   const [sectionModal, setSectionModal] = useState<string | null>(null);
   const [editSection, setEditSection] = useState<any>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [gradeTab, setGradeTab] = useState<Record<string, "sections" | "subjects">>({});
 
   const load = () => { setLoading(true); api.admin.classes().then(setData).finally(() => setLoading(false)); };
   useEffect(() => {
@@ -290,52 +427,73 @@ export default function Classes() {
                 </div>
 
                 {expanded.has(grade.id) && (
-                  <div className="border-t border-gray-100 px-5 py-3">
-                    {(grade.sections ?? []).length === 0 ? (
-                      <p className="text-xs text-gray-400 py-2 text-center">No sections yet. <button onClick={() => setSectionModal(grade.id)} className="text-blue-500">Add one →</button></p>
-                    ) : (
-                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
-                        {grade.sections.map((sec: any) => {
-                          const perf = (PERF_CFG[sec.performance] ?? PERF_CFG.AVERAGE)!;
-                          const occupied = sec.occupiedSeats ?? sec._count?.enrollments ?? 0;
-                          const total = sec.totalSeats ?? 40;
-                          const pct = Math.round((occupied / total) * 100);
-                          return (
-                            <div key={sec.id} onClick={() => navigate(`/admin/sections/${sec.id}`)}
-                              className={cn("group rounded-xl p-3 border cursor-pointer hover:shadow-md transition-shadow", perf.color.includes("emerald") ? "bg-emerald-50/50 border-emerald-100" : perf.color.includes("blue") ? "bg-blue-50/50 border-blue-100" : perf.color.includes("amber") ? "bg-amber-50/50 border-amber-100" : "bg-rose-50/50 border-rose-100")}>
-                              <div className="flex items-start justify-between mb-2">
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                  <div className={cn("w-2 h-2 rounded-full shrink-0", perf.dot)} />
-                                  <p className="text-sm font-semibold text-gray-800 truncate">{sec.name}</p>
+                  <div className="border-t border-gray-100">
+                    {/* Tabs */}
+                    <div className="flex gap-0 border-b border-gray-100 px-5">
+                      {(["sections", "subjects"] as const).map((t) => {
+                        const active = (gradeTab[grade.id] ?? "sections") === t;
+                        return (
+                          <button key={t} onClick={() => setGradeTab((p) => ({ ...p, [grade.id]: t }))}
+                            className={cn("flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-colors capitalize",
+                              active ? "border-blue-500 text-blue-700" : "border-transparent text-gray-400 hover:text-gray-600")}>
+                            {t === "sections" ? <Users className="w-3.5 h-3.5" /> : <Layers className="w-3.5 h-3.5" />}
+                            {t}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="px-5 py-3">
+                      {(gradeTab[grade.id] ?? "sections") === "sections" ? (
+                        (grade.sections ?? []).length === 0 ? (
+                          <p className="text-xs text-gray-400 py-2 text-center">No sections yet. <button onClick={() => setSectionModal(grade.id)} className="text-blue-500">Add one →</button></p>
+                        ) : (
+                          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+                            {grade.sections.map((sec: any) => {
+                              const perf = (PERF_CFG[sec.performance] ?? PERF_CFG.AVERAGE)!;
+                              const occupied = sec.occupiedSeats ?? sec._count?.enrollments ?? 0;
+                              const total = sec.totalSeats ?? 40;
+                              const pct = Math.round((occupied / total) * 100);
+                              return (
+                                <div key={sec.id} onClick={() => navigate(`/admin/sections/${sec.id}`)}
+                                  className={cn("group rounded-xl p-3 border cursor-pointer hover:shadow-md transition-shadow", perf.color.includes("emerald") ? "bg-emerald-50/50 border-emerald-100" : perf.color.includes("blue") ? "bg-blue-50/50 border-blue-100" : perf.color.includes("amber") ? "bg-amber-50/50 border-amber-100" : "bg-rose-50/50 border-rose-100")}>
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <div className={cn("w-2 h-2 rounded-full shrink-0", perf.dot)} />
+                                      <p className="text-sm font-semibold text-gray-800 truncate">{sec.name}</p>
+                                    </div>
+                                    <div className="flex gap-1 shrink-0 ml-1">
+                                      <button onClick={(e) => { e.stopPropagation(); setEditSection({ ...sec, gradeId: grade.id }); setSectionModal(null); }}
+                                        className="p-1 text-gray-400 hover:text-blue-500 hover:bg-white rounded-lg transition-colors"><Edit3 className="w-3 h-3" /></button>
+                                      <button onClick={async (e) => { e.stopPropagation(); if (confirm("Delete this section?")) { try { await api.admin.deleteSection(sec.id); } finally { load(); } } }}
+                                        className="p-1 text-gray-400 hover:text-rose-500 hover:bg-white rounded-lg transition-colors"><Trash2 className="w-3 h-3" /></button>
+                                    </div>
+                                  </div>
+                                  <p className="text-[11px] text-blue-500 mb-1">View students →</p>
+                                  <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
+                                    <span><Users className="w-3 h-3 inline mr-0.5" />{occupied} students</span>
+                                    <span className={cn("font-medium text-xs px-1.5 py-0.5 rounded-md border", perf.color)}>{perf.label}</span>
+                                  </div>
+                                  <div className="mt-2">
+                                    <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                      <span>Seats</span><span>{occupied}/{total}</span>
+                                    </div>
+                                    <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                      <div className={cn("h-full rounded-full", pct >= 90 ? "bg-rose-400" : pct >= 70 ? "bg-amber-400" : "bg-emerald-400")}
+                                        style={{ width: `${Math.min(100, pct)}%` }} />
+                                    </div>
+                                    {pct >= 90 && <p className="text-xs text-rose-500 mt-0.5">Almost full</p>}
+                                    {total - occupied <= 0 && <p className="text-xs text-rose-500 mt-0.5 font-medium">Section full</p>}
+                                  </div>
                                 </div>
-                                <div className="flex gap-1 shrink-0 ml-1">
-                                  <button onClick={(e) => { e.stopPropagation(); setEditSection({ ...sec, gradeId: grade.id }); setSectionModal(null); }}
-                                    className="p-1 text-gray-400 hover:text-blue-500 hover:bg-white rounded-lg transition-colors"><Edit3 className="w-3 h-3" /></button>
-                                  <button onClick={async (e) => { e.stopPropagation(); if (confirm("Delete this section?")) { try { await api.admin.deleteSection(sec.id); } finally { load(); } } }}
-                                    className="p-1 text-gray-400 hover:text-rose-500 hover:bg-white rounded-lg transition-colors"><Trash2 className="w-3 h-3" /></button>
-                                </div>
-                              </div>
-                              <p className="text-[11px] text-blue-500 mb-1">View students →</p>
-                              <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
-                                <span><Users className="w-3 h-3 inline mr-0.5" />{occupied} students</span>
-                                <span className={cn("font-medium text-xs px-1.5 py-0.5 rounded-md border", perf.color)}>{perf.label}</span>
-                              </div>
-                              <div className="mt-2">
-                                <div className="flex justify-between text-xs text-gray-400 mb-1">
-                                  <span>Seats</span><span>{occupied}/{total}</span>
-                                </div>
-                                <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                                  <div className={cn("h-full rounded-full", pct >= 90 ? "bg-rose-400" : pct >= 70 ? "bg-amber-400" : "bg-emerald-400")}
-                                    style={{ width: `${Math.min(100, pct)}%` }} />
-                                </div>
-                                {pct >= 90 && <p className="text-xs text-rose-500 mt-0.5">Almost full</p>}
-                                {total - occupied <= 0 && <p className="text-xs text-rose-500 mt-0.5 font-medium">Section full</p>}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
+                              );
+                            })}
+                          </div>
+                        )
+                      ) : (
+                        <GradeSubjectsPanel gradeId={grade.id} sections={grade.sections ?? []} />
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

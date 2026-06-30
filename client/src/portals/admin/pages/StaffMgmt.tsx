@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import EditDrawer from "./_EditDrawer";
 
 // Non-teaching staff designations.
-const DESIGNATIONS = ["Accountant", "Librarian", "Cleaner", "Security Guard", "Receptionist", "Lab Assistant", "Office Assistant", "Driver", "Helper", "Cook", "Gardener", "IT Support", "Nurse", "Store Keeper"];
+const DESIGNATIONS = ["Accountant", "Librarian", "Cleaner", "Security Guard", "Receptionist", "Lab Assistant", "Office Assistant", "Driver", "Helper", "Cook", "Gardener", "IT Support", "Nurse", "Store Keeper", "Schedule Manager", "DI"];
 const dummyAvatar = (name: string) => `https://ui-avatars.com/api/?name=${encodeURIComponent(name || "Staff")}&background=random&size=128`;
 
 function StaffModal({ open, onClose, onSave }: { open: boolean; onClose: () => void; onSave: (d: any) => Promise<void> }) {

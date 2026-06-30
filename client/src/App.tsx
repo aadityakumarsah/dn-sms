@@ -1,5 +1,5 @@
 import "./index.css";
-import { lazy, Suspense } from "react";
+import React, { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/common/ProtectedRoute";
@@ -14,7 +14,7 @@ import Login from "@/pages/auth/Login";
 import { superAdminNav } from "@/portals/super-admin/layout/nav";
 import { adminNav } from "@/portals/admin/layout/nav";
 import { teacherNav } from "@/portals/teacher/layout/nav";
-import { staffNav } from "@/portals/staff/layout/nav";
+import { staffNav, scheduleManagerNav, diNav } from "@/portals/staff/layout/nav";
 import { parentNav } from "@/portals/parent/layout/nav";
 import { studentNav } from "@/portals/student/layout/nav";
 
@@ -38,6 +38,7 @@ const AdminClasses = lazy(() => import("@/portals/admin/pages/Classes"));
 const AdminSections = lazy(() => import("@/portals/admin/pages/Sections"));
 const AdminSectionDetail = lazy(() => import("@/portals/admin/pages/SectionDetail"));
 const AdminSubjects = lazy(() => import("@/portals/admin/pages/Subjects"));
+const AdminSubjectManagement = lazy(() => import("@/portals/admin/pages/SubjectManagement"));
 const AdminTransport = lazy(() => import("@/portals/admin/pages/Transport"));
 const AdminDepartments = lazy(() => import("@/portals/admin/pages/Departments"));
 const AdminAttendance = lazy(() => import("@/portals/admin/pages/Attendance"));
@@ -83,6 +84,8 @@ const StaffMembers = lazy(() => import("@/portals/staff/pages/Members"));
 const StaffAttendance = lazy(() => import("@/portals/staff/pages/Attendance"));
 const StaffPayroll = lazy(() => import("@/portals/staff/pages/Payroll"));
 const StaffInventory = lazy(() => import("@/portals/staff/pages/Inventory"));
+const StaffScheduleBuilder = lazy(() => import("@/portals/staff/pages/ScheduleBuilder"));
+const StaffDisciplineManager = lazy(() => import("@/portals/staff/pages/DisciplineManager"));
 
 const ParentDashboard = lazy(() => import("@/portals/parent/pages/Dashboard"));
 const ParentRoutine = lazy(() => import("@/portals/parent/pages/Routine"));
@@ -122,6 +125,15 @@ function RootRedirect() {
   const { isAuthenticated, user } = useAuth();
   if (isAuthenticated && user) return <Navigate to={ROLE_HOME[user.role]} replace />;
   return <Landing />;
+}
+
+function StaffPortalWrapper({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const desig = user?.staffDesignation?.toLowerCase() ?? "";
+  const nav = desig.includes("schedule") ? scheduleManagerNav
+    : desig === "di" ? diNav
+    : staffNav;
+  return <PortalLayout navItems={nav}>{children}</PortalLayout>;
 }
 
 export default function App() {
@@ -168,6 +180,7 @@ export default function App() {
                     <Route path="sections" element={<AdminSections />} />
                     <Route path="sections/:id" element={<AdminSectionDetail />} />
                     <Route path="subjects" element={<AdminSubjects />} />
+                    <Route path="subject-management" element={<AdminSubjectManagement />} />
                     <Route path="transport" element={<AdminTransport />} />
                     <Route path="departments" element={<AdminDepartments />} />
                     <Route path="attendance" element={<AdminAttendance />} />
@@ -225,16 +238,18 @@ export default function App() {
             {/* Staff Portal */}
             <Route path="/staff/*" element={
               <ProtectedRoute allowedRoles={["staff"]}>
-                <PortalLayout navItems={staffNav}>
+                <StaffPortalWrapper>
                   <Routes>
                     <Route index element={<StaffDashboard />} />
                     <Route path="members" element={<StaffMembers />} />
                     <Route path="attendance" element={<StaffAttendance />} />
                     <Route path="payroll" element={<StaffPayroll />} />
                     <Route path="inventory" element={<StaffInventory />} />
+                    <Route path="schedule" element={<StaffScheduleBuilder />} />
+                    <Route path="discipline" element={<StaffDisciplineManager />} />
                     <Route path="settings" element={<ComingSoon title="Settings" />} />
                   </Routes>
-                </PortalLayout>
+                </StaffPortalWrapper>
               </ProtectedRoute>
             } />
 
