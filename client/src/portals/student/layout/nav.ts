@@ -1,4 +1,4 @@
-import { LayoutDashboard, BookOpen, CalendarCheck, FileText, Clock, Megaphone, Settings, GraduationCap } from "lucide-react";
+import { LayoutDashboard, BookOpen, CalendarCheck, FileText, Clock, Megaphone, Settings, GraduationCap, User } from "lucide-react";
 import type { NavSection } from "@/types";
 
 export const studentNav: NavSection[] = [
@@ -6,6 +6,7 @@ export const studentNav: NavSection[] = [
     section: "Overview",
     items: [
       { label: "Dashboard", href: "/student", icon: LayoutDashboard },
+      { label: "My Profile", href: "/student/profile", icon: User },
     ],
   },
   {

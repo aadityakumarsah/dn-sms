@@ -78,10 +78,12 @@ const TeacherAttendance = lazy(() => import("@/portals/teacher/pages/Attendance"
 const TeacherAssignments = lazy(() => import("@/portals/teacher/pages/Assignments"));
 const TeacherMarks = lazy(() => import("@/portals/teacher/pages/Marks"));
 const TeacherMessages = lazy(() => import("@/portals/teacher/pages/Messages"));
+const TeacherNotices = lazy(() => import("@/portals/teacher/pages/Notices"));
 
 const StaffDashboard = lazy(() => import("@/portals/staff/pages/Dashboard"));
 const StaffMembers = lazy(() => import("@/portals/staff/pages/Members"));
 const StaffAttendance = lazy(() => import("@/portals/staff/pages/Attendance"));
+const StaffNotices = lazy(() => import("@/portals/staff/pages/Notices"));
 const StaffPayroll = lazy(() => import("@/portals/staff/pages/Payroll"));
 const StaffInventory = lazy(() => import("@/portals/staff/pages/Inventory"));
 const StaffScheduleBuilder = lazy(() => import("@/portals/staff/pages/ScheduleBuilder"));
@@ -100,6 +102,7 @@ const StudentSubjects = lazy(() => import("@/portals/student/pages/Subjects"));
 const StudentAttendance = lazy(() => import("@/portals/student/pages/Attendance"));
 const StudentResults = lazy(() => import("@/portals/student/pages/Results"));
 const StudentTimetable = lazy(() => import("@/portals/student/pages/Timetable"));
+const StudentMyProfile = lazy(() => import("@/portals/student/pages/MyProfile"));
 const StudentExams = lazy(() => import("@/portals/student/pages/Exams"));
 const StudentNotices = lazy(() => import("@/portals/student/pages/Notices"));
 
@@ -228,6 +231,7 @@ export default function App() {
                     <Route path="attendance" element={<TeacherAttendance />} />
                     <Route path="assignments" element={<TeacherAssignments />} />
                     <Route path="marks" element={<TeacherMarks />} />
+                    <Route path="notices" element={<TeacherNotices />} />
                     <Route path="messages" element={<TeacherMessages />} />
                     <Route path="settings" element={<ComingSoon title="Settings" />} />
                   </Routes>
@@ -243,6 +247,7 @@ export default function App() {
                     <Route index element={<StaffDashboard />} />
                     <Route path="members" element={<StaffMembers />} />
                     <Route path="attendance" element={<StaffAttendance />} />
+                    <Route path="notices" element={<StaffNotices />} />
                     <Route path="payroll" element={<StaffPayroll />} />
                     <Route path="inventory" element={<StaffInventory />} />
                     <Route path="schedule" element={<StaffScheduleBuilder />} />
@@ -277,6 +282,7 @@ export default function App() {
                 <PortalLayout navItems={studentNav}>
                   <Routes>
                     <Route index element={<StudentDashboard />} />
+                    <Route path="profile" element={<StudentMyProfile />} />
                     <Route path="subjects" element={<StudentSubjects />} />
                     <Route path="attendance" element={<StudentAttendance />} />
                     <Route path="results" element={<StudentResults />} />
