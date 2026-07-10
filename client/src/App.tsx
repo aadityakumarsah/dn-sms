@@ -78,12 +78,12 @@ const TeacherAttendance = lazy(() => import("@/portals/teacher/pages/Attendance"
 const TeacherAssignments = lazy(() => import("@/portals/teacher/pages/Assignments"));
 const TeacherMarks = lazy(() => import("@/portals/teacher/pages/Marks"));
 const TeacherMessages = lazy(() => import("@/portals/teacher/pages/Messages"));
-const TeacherNotices = lazy(() => import("@/portals/teacher/pages/Notices"));
+const TeacherNotices = lazy(() => import("./portals/teacher/pages/Notices"));
 
 const StaffDashboard = lazy(() => import("@/portals/staff/pages/Dashboard"));
 const StaffMembers = lazy(() => import("@/portals/staff/pages/Members"));
 const StaffAttendance = lazy(() => import("@/portals/staff/pages/Attendance"));
-const StaffNotices = lazy(() => import("@/portals/staff/pages/Notices"));
+const StaffNotices = lazy(() => import("./portals/staff/pages/Notices"));
 const StaffPayroll = lazy(() => import("@/portals/staff/pages/Payroll"));
 const StaffInventory = lazy(() => import("@/portals/staff/pages/Inventory"));
 const StaffScheduleBuilder = lazy(() => import("@/portals/staff/pages/ScheduleBuilder"));
@@ -102,7 +102,7 @@ const StudentSubjects = lazy(() => import("@/portals/student/pages/Subjects"));
 const StudentAttendance = lazy(() => import("@/portals/student/pages/Attendance"));
 const StudentResults = lazy(() => import("@/portals/student/pages/Results"));
 const StudentTimetable = lazy(() => import("@/portals/student/pages/Timetable"));
-const StudentMyProfile = lazy(() => import("@/portals/student/pages/MyProfile"));
+const StudentMyProfile = lazy(() => import("./portals/student/pages/MyProfile"));
 const StudentExams = lazy(() => import("@/portals/student/pages/Exams"));
 const StudentNotices = lazy(() => import("@/portals/student/pages/Notices"));
 
