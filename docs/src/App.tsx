@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Book, Code, Database, Settings, Map, Shield, Terminal, Search, Menu, X, ExternalLink } from "lucide-react";
+import { Book, Code, Database, Settings, Map, Shield, Terminal, Search, Menu, X, ExternalLink, GraduationCap } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import "./index.css";
 
@@ -13,8 +13,10 @@ import { Portals } from "./pages/portals";
 import { Database as DatabasePage } from "./pages/database";
 import { Deployment } from "./pages/deployment";
 import { Troubleshooting } from "./pages/troubleshooting";
+import { TeacherGuide } from "./pages/teacher-guide";
 
 const pages: Record<string, { component: () => JSX.Element; label: string; icon: typeof Book }> = {
+  "teacher-guide": { component: TeacherGuide, label: "Teacher Guide", icon: GraduationCap },
   overview: { component: Overview, label: "Overview", icon: Book },
   architecture: { component: Architecture, label: "Architecture", icon: Map },
   setup: { component: Setup, label: "Setup Guide", icon: Terminal },
@@ -87,7 +89,7 @@ export function App() {
           })}
 
           <div className="px-3 py-2 mt-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Guides</div>
-          {(["developer-guide", "portals", "database"] as const).map(key => {
+          {(["teacher-guide", "developer-guide", "portals", "database"] as const).map(key => {
             const p = pages[key];
             const Icon = p.icon;
             return (
