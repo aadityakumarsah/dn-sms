@@ -149,7 +149,7 @@ export default function Timetable() {
                 className={cn(
                   "px-4 py-2 rounded-xl text-sm font-medium transition-colors",
                   shiftFilter === opt.key
-                    ? "bg-sky-500 text-white"
+                    ? "bg-secondary text-white"
                     : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"
                 )}
               >
@@ -239,18 +239,18 @@ export default function Timetable() {
             const periods = byDay[di] ?? [];
             const isToday = di === todayIdx;
             return (
-              <div key={dayName} className={cn("px-5 py-4", isToday && "bg-sky-50/40")}>
+              <div key={dayName} className={cn("px-5 py-4", isToday && "bg-secondary/5")}>
                 <div className="flex items-center gap-2 mb-3">
                   <h3
                     className={cn(
                       "text-sm font-semibold",
-                      isToday ? "text-sky-600" : "text-gray-700"
+                      isToday ? "text-secondary font-bold" : "text-gray-700"
                     )}
                   >
                     {dayName}
                   </h3>
                   {isToday && (
-                    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-sky-100 text-sky-600">
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-secondary/10 text-secondary">
                       Today
                     </span>
                   )}

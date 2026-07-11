@@ -53,9 +53,9 @@ export const PORTAL_CONFIGS: Record<UserRole, PortalConfig> = {
   student: {
     role: "student",
     label: "Student",
-    color: "sky",
-    bgColor: "bg-sky-500",
-    textColor: "text-sky-500",
+    color: "navy",
+    bgColor: "bg-primary",
+    textColor: "text-primary",
     description: "View your classes, results, notices and schedule",
     icon: "🎒",
   },

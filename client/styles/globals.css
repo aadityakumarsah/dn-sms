@@ -118,3 +118,13 @@
     @apply bg-background text-foreground;
   }
 }
+
+.student-portal {
+  --primary: #163355;
+  --primary-foreground: #ffffff;
+  --secondary: #197ADC;
+  --secondary-foreground: #ffffff;
+  
+  --sidebar-primary: #163355;
+  --sidebar-accent: #197ADC;
+}
