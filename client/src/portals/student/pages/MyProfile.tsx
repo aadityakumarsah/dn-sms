@@ -83,7 +83,7 @@ export default function MyProfile() {
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-5">
       {/* Header */}
-      <div className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl p-6 text-white">
+      <div className="bg-gradient-to-br from-primary via-[#204975] to-secondary rounded-2xl p-6 text-white shadow-md shadow-blue-900/5">
         <div className="flex items-center gap-4">
           {data.avatar ? (
             <img src={data.avatar} alt={fullName} className="w-16 h-16 rounded-2xl object-cover border-2 border-white/30 shrink-0" />

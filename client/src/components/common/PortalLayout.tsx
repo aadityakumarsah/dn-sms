@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, Menu, X, ChevronDown, Bell, Search, Lock } from "lucide-react";
+import { LogOut, Menu, X, ChevronDown, Bell, Search, Lock, Building2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { PORTAL_CONFIGS, APP_NAME } from "@/lib/constants";
 import { cn } from "@/lib/utils";
@@ -13,7 +13,8 @@ interface PortalLayoutProps {
 }
 
 function isNavSections(items: NavItem[] | NavSection[]): items is NavSection[] {
-  return items.length > 0 && "section" in items[0];
+  const first = items[0];
+  return items.length > 0 && first !== undefined && "section" in first;
 }
 
 const BADGE_COLORS: Record<string, string> = {
@@ -47,8 +48,13 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
       prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]
     );
 
-  const isActive = (href: string) =>
-    location.pathname === href || (href !== "/super-admin" && href !== "/admin" && location.pathname.startsWith(href + "/"));
+  const isActive = (href: string) => {
+    const isRoot = href === "/student" || href === "/teacher" || href === "/parent" || href === "/staff" || href === "/admin" || href === "/super-admin";
+    if (isRoot) {
+      return location.pathname === href || location.pathname === href + "/";
+    }
+    return location.pathname === href || location.pathname.startsWith(href + "/");
+  };
 
   const [schoolsCount, setSchoolsCount] = useState<number | undefined>(undefined);
   const [announcementsCount, setAnnouncementsCount] = useState<number | undefined>(undefined);
@@ -108,13 +114,13 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
           key={item.href}
           title={item.lockLabel ?? "Upgrade your plan to unlock"}
           className={cn(
-            "flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium mb-0.5 cursor-not-allowed select-none",
+            "group flex gap-x-3 rounded-md p-2 text-sm font-semibold mb-1 cursor-not-allowed select-none",
             isDark ? "text-white/30" : "text-gray-400"
           )}
         >
-          <Icon className="w-4 h-4 shrink-0 opacity-60" />
+          <Icon className="w-5 h-5 shrink-0 opacity-60" />
           <span className="flex-1 truncate">{item.label}</span>
-          <span className={cn("flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold", BADGE_COLORS.danger)}>
+          <span className={cn("flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-bold", BADGE_COLORS.danger)}>
             <Lock className="w-2.5 h-2.5" /> Upgrade
           </span>
         </div>
@@ -123,37 +129,38 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
 
     if (item.children?.length) {
       return (
-        <div key={item.label}>
+        <div key={item.label} className="mb-1">
           <button
             onClick={() => toggleExpand(item.label)}
             className={cn(
-              "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors mb-0.5",
+              "w-full flex gap-x-3 rounded-md p-2 text-sm font-semibold mb-1 transition-colors text-left",
               isDark
-                ? active ? "bg-white/10 text-white" : "text-white/60 hover:text-white hover:bg-white/8"
-                : active ? cn("text-white", config.bgColor) : "text-gray-600 hover:bg-gray-100"
+                ? active ? "bg-white/12 text-white" : "text-white/60 hover:text-white hover:bg-white/8"
+                : active ? cn("text-white", config.bgColor) : "text-gray-600 hover:text-secondary hover:bg-gray-100"
             )}
           >
-            <Icon className="w-4 h-4 shrink-0" />
-            <span className="flex-1 text-left">{item.label}</span>
-            <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", expanded && "rotate-180")} />
+            <Icon className="w-5 h-5 shrink-0" />
+            <span className="flex-1 truncate">{item.label}</span>
+            <ChevronDown className={cn("w-4 h-4 shrink-0 transition-transform mt-0.5", expanded && "rotate-180")} />
           </button>
           {expanded && (
-            <div className="ml-7 pl-3 border-l border-white/10 mb-1">
+            <div className={cn("ml-4 pl-3 border-l mb-2 space-y-0.5", isDark ? "border-white/10" : "border-gray-200")}>
               {item.children.map((child) => {
                 const ChildIcon = child.icon;
+                const childActive = isActive(child.href);
                 return (
                   <Link
                     key={child.href}
                     to={child.href}
                     onClick={() => setSidebarOpen(false)}
                     className={cn(
-                      "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors mb-0.5",
+                      "flex items-center gap-x-3 rounded-md px-3 py-2 text-xs font-semibold transition-colors",
                       isDark
-                        ? isActive(child.href) ? "bg-white/10 text-white" : "text-white/50 hover:text-white hover:bg-white/8"
-                        : isActive(child.href) ? cn("text-white", config.bgColor) : "text-gray-500 hover:bg-gray-100"
+                        ? childActive ? "bg-white/12 text-white" : "text-white/50 hover:text-white hover:bg-white/8"
+                        : childActive ? cn("text-white", config.bgColor) : "text-gray-500 hover:text-secondary hover:bg-gray-100"
                     )}
                   >
-                    <ChildIcon className="w-3.5 h-3.5 shrink-0" />
+                    <ChildIcon className="w-4 h-4 shrink-0" />
                     {child.label}
                   </Link>
                 );
@@ -170,21 +177,21 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
         to={item.href}
         onClick={() => setSidebarOpen(false)}
         className={cn(
-          "flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors mb-0.5",
+          "group flex gap-x-3 rounded-md p-2 text-sm font-semibold mb-1 transition-all duration-150",
           isDark
             ? active
               ? "bg-white/12 text-white shadow-sm"
               : "text-white/60 hover:text-white hover:bg-white/8"
             : active
               ? cn("text-white shadow-sm", config.bgColor)
-              : "text-gray-600 hover:bg-gray-100"
+              : "text-gray-600 hover:text-secondary hover:bg-gray-100"
         )}
       >
-        <Icon className="w-4 h-4 shrink-0" />
-        <span className="flex-1">{item.label}</span>
+        <Icon className="w-5 h-5 shrink-0" />
+        <span className="flex-1 truncate">{item.label}</span>
         {item.badge !== undefined && (
           <span className={cn(
-            "text-xs px-1.5 py-0.5 rounded-full font-medium",
+            "text-xs px-1.5 py-0.5 rounded-full font-bold",
             active
               ? "bg-white/20 text-white"
               : BADGE_COLORS[badgeVariant] ?? BADGE_COLORS.default
@@ -200,81 +207,54 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
   const borderColor = isDark ? "border-white/8" : "border-gray-200";
 
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden">
+    <div className={cn("flex h-screen bg-gray-50 overflow-hidden", user.role === "student" && "student-portal")}>
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/60 z-20 lg:hidden" onClick={() => setSidebarOpen(false)} />
       )}
 
       {/* Sidebar */}
       <aside className={cn(
-        "fixed inset-y-0 left-0 z-30 w-60 flex flex-col transition-transform duration-200 lg:static lg:translate-x-0 border-r",
+        "fixed inset-y-0 left-0 z-35 w-64 flex flex-col transition-transform duration-200 lg:static lg:translate-x-0 border-r",
         sidebarBg, borderColor,
         sidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         {/* Logo */}
-        <div className={cn("flex items-center gap-3 px-4 h-14 border-b shrink-0", borderColor)}>
+        <div className={cn("flex items-center gap-2.5 px-6 h-16 border-b shrink-0", borderColor)}>
           <div className={cn(
-            "w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold shrink-0",
+            "w-9 h-9 rounded-lg flex items-center justify-center text-[15px] font-bold shrink-0 shadow-sm shadow-purple-100",
             isDark ? "bg-purple-500 text-white" : cn("text-white", config.bgColor)
           )}>
             {APP_NAME[0]}
           </div>
           <div className="flex-1 min-w-0">
-            <p className={cn("text-sm font-bold truncate", isDark ? "text-white" : "text-gray-900")}>{APP_NAME}</p>
-            <p className={cn("text-xs truncate", isDark ? "text-purple-400" : config.textColor)}>{config.label} Portal</p>
+            <span className={cn("text-[20px] font-bold tracking-tight truncate block leading-none", isDark ? "text-white" : "text-gray-800")}>
+              <span className="text-secondary">DN</span>
+              <span>-SMS</span>
+            </span>
+            <span className={cn("text-[10px] uppercase font-bold tracking-wider block mt-1.5 leading-none", isDark ? "text-purple-400" : config.textColor)}>
+              {config.label} Portal
+            </span>
           </div>
           <button className="ml-auto lg:hidden" onClick={() => setSidebarOpen(false)}>
             <X className={cn("w-4 h-4", isDark ? "text-white/50" : "text-gray-500")} />
           </button>
         </div>
 
-        {/* School name badge (non super-admin) */}
-        {user.schoolName && (
-          <div className={cn("px-4 py-2 border-b", borderColor, isDark ? "bg-white/4" : "bg-gray-50")}>
-            <p className={cn("text-xs truncate", isDark ? "text-white/40" : "text-gray-400")}>{user.schoolName}</p>
-          </div>
-        )}
 
-        {/* Sidebar search */}
-        <div className={cn("px-2 pt-2 pb-1 border-b shrink-0", borderColor)}>
-          <div className="relative">
-            <Search className={cn("absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none", isDark ? "text-white/30" : "text-gray-400")} />
-            <input
-              type="text"
-              value={sidebarQuery}
-              onChange={(e) => setSidebarQuery(e.target.value)}
-              placeholder="Search menu…"
-              className={cn(
-                "w-full pl-8 pr-7 py-1.5 text-xs rounded-lg outline-none transition-colors",
-                isDark
-                  ? "bg-white/8 text-white placeholder-white/30 focus:bg-white/12 focus:ring-1 focus:ring-white/20"
-                  : "bg-gray-100 text-gray-700 placeholder-gray-400 focus:bg-white focus:ring-1 focus:ring-blue-400"
-              )}
-            />
-            {sidebarQuery && (
-              <button
-                onClick={() => setSidebarQuery("")}
-                className={cn("absolute right-2 top-1/2 -translate-y-1/2", isDark ? "text-white/30 hover:text-white/60" : "text-gray-400 hover:text-gray-600")}
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-        </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
+        <nav className="flex-1 overflow-y-auto py-4 px-4 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:'none'] [scrollbar-width:'none']">
           {(() => {
             const q = sidebarQuery.trim().toLowerCase();
             if (!q) {
               return dynamicSections.map((sec) => (
                 <div key={sec.section}>
                   {sec.section && (
-                    <p className={cn("text-[10px] font-semibold uppercase tracking-widest px-3 mb-1.5", isDark ? "text-white/25" : "text-gray-400")}>
+                    <p className={cn("text-[10px] font-bold uppercase tracking-widest px-2 mb-2", isDark ? "text-white/25" : "text-gray-400")}>
                       {sec.section}
                     </p>
                   )}
-                  <div>{sec.items.map(renderNavItem)}</div>
+                  <div className="space-y-0.5">{sec.items.map(renderNavItem)}</div>
                 </div>
               ));
             }
@@ -305,8 +285,8 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
             }
 
             return (
-              <div>
-                <p className={cn("text-[10px] font-semibold uppercase tracking-widest px-3 mb-1.5", isDark ? "text-white/25" : "text-gray-400")}>
+              <div className="space-y-0.5">
+                <p className={cn("text-[10px] font-bold uppercase tracking-widest px-2 mb-2", isDark ? "text-white/25" : "text-gray-400")}>
                   {matches.length} result{matches.length !== 1 ? "s" : ""}
                 </p>
                 {matches.map(({ item, sectionLabel }) => {
@@ -318,23 +298,23 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
                       to={item.locked ? "#" : item.href}
                       onClick={() => { if (!item.locked) { setSidebarOpen(false); setSidebarQuery(""); } }}
                       className={cn(
-                        "flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors mb-0.5",
+                        "group flex gap-x-3 rounded-md p-2 text-sm font-semibold mb-1 transition-all duration-150",
                         item.locked
                           ? cn("cursor-not-allowed select-none", isDark ? "text-white/30" : "text-gray-400")
                           : isDark
-                            ? active ? "bg-white/12 text-white" : "text-white/60 hover:text-white hover:bg-white/8"
-                            : active ? cn("text-white shadow-sm", config.bgColor) : "text-gray-600 hover:bg-gray-100"
+                            ? active ? "bg-white/12 text-white shadow-sm" : "text-white/60 hover:text-white hover:bg-white/8"
+                            : active ? cn("text-white shadow-sm", config.bgColor) : "text-gray-600 hover:text-secondary hover:bg-gray-100"
                       )}
                     >
-                      <Icon className="w-4 h-4 shrink-0" />
+                      <Icon className="w-5 h-5 shrink-0" />
                       <div className="flex-1 min-w-0">
                         <span className="block truncate">{item.label}</span>
                         {sectionLabel && (
-                          <span className={cn("text-[10px] truncate", isDark ? "text-white/25" : "text-gray-400")}>{sectionLabel}</span>
+                          <span className={cn("text-[10px] truncate block font-normal", isDark ? "text-white/25" : "text-gray-400")}>{sectionLabel}</span>
                         )}
                       </div>
                       {item.locked && (
-                        <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-1", BADGE_COLORS.danger)}>
+                        <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 shrink-0 self-center", BADGE_COLORS.danger)}>
                           <Lock className="w-2.5 h-2.5" /> Upgrade
                         </span>
                       )}
@@ -346,60 +326,94 @@ export function PortalLayout({ children, navItems }: PortalLayoutProps) {
           })()}
         </nav>
 
-        {/* User */}
-        <div className={cn("border-t p-2 shrink-0", borderColor)}>
-          <div className={cn("flex items-center gap-2.5 px-2 py-2 rounded-lg", isDark ? "hover:bg-white/6" : "hover:bg-gray-50")}>
+        {/* User / Sidebar Footer */}
+        <div className={cn("shrink-0 border-t px-6 py-4 bg-white", borderColor)}>
+          <div className="flex items-center gap-3">
             <div className={cn(
-              "w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0",
+              "w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-inner",
               isDark ? "bg-purple-600" : config.bgColor
             )}>
               {user.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
-              <p className={cn("text-xs font-semibold truncate", isDark ? "text-white" : "text-gray-900")}>{user.name}</p>
-              <p className={cn("text-xs truncate", isDark ? "text-white/40" : "text-gray-400")}>{user.email}</p>
+              <p className={cn("text-sm font-semibold truncate leading-tight", isDark ? "text-white" : "text-gray-800")}>{user.name}</p>
+              <p className={cn("text-xs truncate text-gray-400 mt-0.5", isDark ? "text-purple-400/80" : "")}>{user.email}</p>
             </div>
-            <button onClick={handleLogout} title="Logout" className={cn("transition-colors shrink-0", isDark ? "text-white/30 hover:text-red-400" : "text-gray-400 hover:text-red-500")}>
-              <LogOut className="w-3.5 h-3.5" />
+            <button
+              onClick={handleLogout}
+              title="Logout"
+              className={cn(
+                "transition-colors shrink-0 p-1.5 rounded-lg hover:bg-red-50 hover:text-red-600",
+                isDark ? "text-white/40 hover:bg-white/10 hover:text-red-400" : "text-gray-400"
+              )}
+            >
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
       </aside>
 
-      {/* Main */}
+      {/* Main Container */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* Topbar */}
-        <header className="bg-white border-b border-gray-200 px-5 h-14 flex items-center gap-4 shrink-0">
-          <button className="lg:hidden text-gray-500 hover:text-gray-700" onClick={() => setSidebarOpen(true)}>
-            <Menu className="w-5 h-5" />
+        {/* Header Topbar */}
+        <header className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
+          <button
+            type="button"
+            className="-m-2.5 p-2.5 text-gray-700 lg:hidden"
+            onClick={() => setSidebarOpen(true)}
+          >
+            <span className="sr-only">Open sidebar</span>
+            <Menu className="h-6 w-6" />
           </button>
+          <div className="h-6 w-px bg-gray-900/10 lg:hidden" aria-hidden="true"></div>
 
-          {/* Search */}
-          <div className="relative hidden md:flex items-center">
-            <Search className="absolute left-3 w-3.5 h-3.5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search..."
-              className="pl-8 pr-3 py-1.5 text-sm bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent w-56"
-            />
-          </div>
-
-          <div className="flex-1" />
-
-          {/* Notifications */}
-          <button className="relative text-gray-500 hover:text-gray-700 transition-colors">
-            <Bell className="w-5 h-5" />
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red-500 rounded-full" />
-          </button>
-
-          {/* Avatar */}
-          <div className="flex items-center gap-2">
-            <div className={cn("w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold", isDark ? "bg-purple-600" : config.bgColor)}>
-              {user.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+          <div className="flex flex-1 gap-x-4 self-stretch lg:gap-x-6 justify-end lg:justify-between items-center">
+            {/* Left: Organization / Console Info */}
+            <div className="hidden lg:flex items-center gap-4">
+              {user.role !== "super_admin" && (
+                <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shrink-0 shadow-sm shadow-blue-200">
+                  <Building2 className="h-5 w-5 text-white" />
+                </div>
+              )}
+              <h1 className="text-base font-bold text-gray-900">
+                {user.role === "super_admin" ? "Administration Console" : (user.schoolName || "My School")}
+              </h1>
             </div>
-            <div className="hidden sm:block">
-              <p className="text-sm font-semibold text-gray-800 leading-none">{user.name.split(" ")[0]}</p>
-              <p className={cn("text-xs leading-none mt-0.5", isDark ? "text-purple-600" : config.textColor)}>{config.label}</p>
+
+            {/* Right Side Tools & Profile */}
+            <div className="flex items-center gap-4">
+              {/* Search */}
+              <div className="relative hidden md:flex items-center">
+                <Search className="absolute left-3 w-3.5 h-3.5 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search..."
+                  className="pl-9 pr-3 py-1.5 text-sm bg-gray-50 border border-gray-200/80 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent w-56"
+                />
+              </div>
+
+              {/* Notifications */}
+              <button className="relative text-gray-500 hover:text-gray-700 transition-colors p-1 rounded-full hover:bg-gray-50">
+                <Bell className="w-5 h-5" />
+                <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-red-500 rounded-full ring-2 ring-white" />
+              </button>
+
+              <div className="h-6 w-px bg-gray-200" />
+
+              {/* Profile Link Block */}
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-gray-100 ring-2 ring-gray-200 flex items-center justify-center text-xs font-bold text-gray-600 shrink-0">
+                  {user.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+                </div>
+                <div className="hidden lg:block text-left">
+                  <p className="text-sm font-semibold text-gray-800 leading-tight">
+                    {user.name}
+                  </p>
+                  <p className={cn("text-xs mt-0.5 font-medium leading-none", isDark ? "text-purple-600" : config.textColor)}>
+                    {config.label}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </header>

@@ -70,7 +70,7 @@ export default function Results() {
         {groups.map((g) => (
           <button key={g.exam?.id ?? g.exam?.name} onClick={() => setActiveExam(g.exam?.name ?? "")}
             className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-colors",
-              activeExam === g.exam?.name ? "bg-sky-500 text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50")}>
+              activeExam === g.exam?.name ? "bg-secondary text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50")}>
             {g.exam?.name}
           </button>
         ))}
@@ -131,11 +131,11 @@ export default function Results() {
                   <div key={r.id}>
                     <div className="flex justify-between text-xs text-gray-500 mb-1">
                       <span className="font-medium text-gray-700">{r.subject?.name}</span>
-                      <span>Score: <strong className="text-sky-600">{obtained}</strong> / {full}</span>
+                      <span>Score: <strong className="text-secondary">{obtained}</strong> / {full}</span>
                     </div>
                     <div className="relative h-4 bg-gray-100 rounded-full overflow-hidden">
                       <div className="absolute h-full bg-gray-300 rounded-full" style={{ width: `${(pass / full) * 100}%` }} />
-                      <div className={cn("absolute h-full rounded-full opacity-80", obtained >= pass ? "bg-sky-500" : "bg-rose-400")} style={{ width: `${(obtained / full) * 100}%` }} />
+                      <div className={cn("absolute h-full rounded-full opacity-80", obtained >= pass ? "bg-secondary" : "bg-rose-400")} style={{ width: `${(obtained / full) * 100}%` }} />
                     </div>
                   </div>
                 );
@@ -144,13 +144,13 @@ export default function Results() {
           </div>
 
           {/* Overall */}
-          <div className="bg-sky-50 border border-sky-100 rounded-2xl px-6 py-5 flex items-center justify-between">
+          <div className="bg-secondary/5 border border-secondary/15 rounded-2xl px-6 py-5 flex items-center justify-between">
             <div>
               <p className="text-sm font-semibold text-gray-700">Overall — {activeExam}</p>
               <p className="text-xs text-gray-500 mt-0.5">Total: {totalObtained} / {totalFull}</p>
             </div>
             <div className="text-right">
-              <p className="text-3xl font-bold text-sky-700">{overallPct}%</p>
+              <p className="text-3xl font-bold text-secondary">{overallPct}%</p>
               <span className={cn("text-sm font-semibold px-3 py-1 rounded-xl", overall.color)}>{overall.label}</span>
             </div>
           </div>

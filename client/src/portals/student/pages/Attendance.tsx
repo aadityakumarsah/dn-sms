@@ -144,7 +144,7 @@ export default function Attendance() {
           {months.map((m) => (
             <button key={m} onClick={() => setActiveMonth(m)}
               className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-colors",
-                activeMonth === m ? "bg-sky-500 text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50")}>
+                activeMonth === m ? "bg-secondary text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50")}>
               {monthLabel(m + "-01")}
             </button>
           ))}

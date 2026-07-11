@@ -18,6 +18,8 @@ export function StatCard({ title, value, icon: Icon, change, positive, color = "
     teal: "bg-teal-50 text-teal-600",
     sky: "bg-sky-50 text-sky-600",
     red: "bg-red-50 text-red-600",
+    navy: "bg-primary/8 text-primary",
+    brandBlue: "bg-secondary/10 text-secondary",
   };
 
   return (
