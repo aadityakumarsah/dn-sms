@@ -387,6 +387,10 @@ export default function Students() {
   const [fStream, setFStream] = useState("");
   const [fTransport, setFTransport] = useState("");
   const [createdCreds, setCreatedCreds] = useState<any>(null);
+  const [allocStudentId, setAllocStudentId] = useState<string | null>(null);
+  const [allocSectionId, setAllocSectionId] = useState("");
+  const [allocRollNo, setAllocRollNo] = useState("");
+  const [allocSaving, setAllocSaving] = useState(false);
 
   const filterArgs = () => ({
     page, search: debouncedSearch || undefined,
@@ -496,7 +500,50 @@ export default function Students() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{s.className ?? <span className="text-gray-300 text-xs">Not enrolled</span>}</td>
+                    <td className="px-5 py-3">
+                      {allocStudentId === s.id ? (
+                        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          <select value={allocSectionId} onChange={(e) => setAllocSectionId(e.target.value)}
+                            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none bg-white w-32">
+                            <option value="">— Section —</option>
+                            {sections.map((sec: any) => <option key={sec.id} value={sec.id}>{sec.label}</option>)}
+                          </select>
+                          <input value={allocRollNo} onChange={(e) => setAllocRollNo(e.target.value)}
+                            placeholder="Roll" className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none" />
+                          <button onClick={async () => {
+                            if (!allocSectionId) return;
+                            setAllocSaving(true);
+                            try {
+                              await api.admin.allocateStudent(allocStudentId!, { sectionId: allocSectionId, rollNo: allocRollNo || null });
+                              setAllocStudentId(null);
+                              reload();
+                            } catch (e: any) { alert(e.message); }
+                            finally { setAllocSaving(false); }
+                          }} disabled={allocSaving}
+                            className="text-xs bg-blue-600 text-white px-2 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium">
+                            {allocSaving ? "..." : "Save"}
+                          </button>
+                          <button onClick={() => setAllocStudentId(null)}
+                            className="text-xs text-gray-400 hover:text-gray-600 px-1">✕</button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                          {s.className ? (
+                            <>
+                              <span className="text-sm font-medium text-gray-900">{s.className}</span>
+                              {s.rollNo && <span className="text-xs text-gray-400">Roll {s.rollNo}</span>}
+                              <button onClick={() => { setAllocStudentId(s.id); setAllocSectionId(s.sectionId || ""); setAllocRollNo(s.rollNo || ""); }}
+                                className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline ml-0.5">Change</button>
+                            </>
+                          ) : (
+                            <button onClick={() => { setAllocStudentId(s.id); setAllocSectionId(""); setAllocRollNo(""); }}
+                              className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded-lg hover:bg-amber-100 font-medium whitespace-nowrap">
+                              + Allocate
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-sm text-gray-600 capitalize">{s.gender?.toLowerCase() ?? "—"}</td>
                     <td className="px-5 py-3 text-sm text-gray-500">{s.phone ?? "—"}</td>
                     <td className="px-5 py-3">

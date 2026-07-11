@@ -441,22 +441,27 @@ export const api = {
     },
     markAttendance: (data: Record<string, unknown>) => request<any>("/api/teacher/attendance/mark", { method: "POST", body: JSON.stringify(data) }),
     notices: () => request<any[]>("/api/teacher/notices"),
+    notifications: () => request<any[]>("/api/teacher/notifications"),
     routine: () => request<any[]>("/api/teacher/routine"),
     exams: () => request<any[]>("/api/teacher/exams"),
   },
 
   student: {
+    profile: () => request<any>("/api/student/profile"),
     dashboard: () => request<any>("/api/student/dashboard"),
     attendance: () => request<any>("/api/student/attendance"),
     results: () => request<any[]>("/api/student/results"),
     fees: () => request<any[]>("/api/student/fees"),
     notices: () => request<any[]>("/api/student/notices"),
+    notifications: () => request<any[]>("/api/student/notifications"),
     subjects: () => request<any[]>("/api/student/subjects"),
     routine: () => request<any[]>("/api/student/routine"),
     exams: () => request<any[]>("/api/student/exams"),
   },
 
   di: {
+    notices: () => request<any[]>("/api/staff/notices"),
+    notifications: () => request<any[]>("/api/staff/notifications"),
     students: (search?: string) => request<any[]>(`/api/staff/discipline/students${search ? `?search=${encodeURIComponent(search)}` : ""}`),
     records: (studentId?: string) => request<any[]>(`/api/staff/discipline${studentId ? `?studentId=${studentId}` : ""}`),
     create: (data: Record<string, unknown>) => request<any>("/api/staff/discipline", { method: "POST", body: JSON.stringify(data) }),
@@ -464,6 +469,8 @@ export const api = {
     delete: (id: string) => request<any>(`/api/staff/discipline/${id}`, { method: "DELETE" }),
   },
   scheduleManager: {
+    notices: () => request<any[]>("/api/staff/notices"),
+    notifications: () => request<any[]>("/api/staff/notifications"),
     resources: () => request<any>("/api/staff/schedule/resources"),
     slots: () => request<any[]>("/api/staff/schedule"),
     createSlot: (data: Record<string, unknown>) => request<any>("/api/staff/schedule", { method: "POST", body: JSON.stringify(data) }),
@@ -477,6 +484,7 @@ export const api = {
   parent: {
     dashboard: () => request<any>("/api/parent/dashboard"),
     notices: () => request<any[]>("/api/parent/notices"),
+    notifications: () => request<any[]>("/api/parent/notifications"),
     results: () => request<any[]>("/api/parent/results"),
     fees: () => request<any[]>("/api/parent/fees"),
     attendance: () => request<any[]>("/api/parent/attendance"),

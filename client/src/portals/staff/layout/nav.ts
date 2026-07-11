@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, CalendarCheck, DollarSign, Package, Settings, CalendarDays, ShieldAlert } from "lucide-react";
+import { LayoutDashboard, Users, CalendarCheck, DollarSign, Package, Settings, CalendarDays, ShieldAlert, Bell } from "lucide-react";
 import type { NavSection } from "@/types";
 
 export const staffNav: NavSection[] = [
@@ -6,6 +6,7 @@ export const staffNav: NavSection[] = [
     section: "Overview",
     items: [
       { label: "Dashboard", href: "/staff", icon: LayoutDashboard },
+      { label: "Notices", href: "/staff/notices", icon: Bell },
     ],
   },
   {

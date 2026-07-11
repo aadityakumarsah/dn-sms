@@ -58,12 +58,24 @@ export default function Timetable() {
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loading, setLoading] = useState(true);
   const [shiftFilter, setShiftFilter] = useState<ShiftFilter>("ALL");
+  const [enrolled, setEnrolled] = useState(true);
 
   useEffect(() => {
     api.student
       .routine()
-      .then((d: any) => setSlots(Array.isArray(d) ? (d as Slot[]) : []))
-      .catch(() => setSlots([]))
+      .then((d: any) => {
+        if (d && Array.isArray(d.slots)) {
+          setSlots(d.slots as Slot[]);
+          setEnrolled(d.enrolled !== false);
+        } else if (Array.isArray(d)) {
+          setSlots(d as Slot[]);
+          setEnrolled(true);
+        } else {
+          setSlots([]);
+          setEnrolled(true);
+        }
+      })
+      .catch(() => { setSlots([]); setEnrolled(true); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -147,6 +159,12 @@ export default function Timetable() {
           </div>
         )}
       </div>
+
+      {!enrolled && (
+        <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 text-center">
+          <p className="text-sm text-amber-700 font-medium">You are not currently enrolled in any class. Please contact your class teacher.</p>
+        </div>
+      )}
 
       {/* Today's Classes */}
       <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">

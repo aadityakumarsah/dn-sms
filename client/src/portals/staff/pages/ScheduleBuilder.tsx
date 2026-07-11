@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   CalendarDays, Plus, Trash2, RefreshCw, AlertCircle,
   CheckCircle2, Loader2, X, ChevronDown, Users, BookOpen,
-  Clock, FlaskConical, ShieldCheck, Settings2,
+  Clock, FlaskConical, ShieldCheck, Settings2, LayoutGrid,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -372,14 +372,82 @@ function AddDutyModal({ resources, dayOfWeek, onClose, onAdded }: {
   );
 }
 
+// ─── Grid Timetable View ──────────────────────────────────────────────────────
+function GridTimetableView({ slots, workingDays, onAdd, onDelete, deletingId }: {
+  slots: any[]; workingDays: number[]; onAdd: (day: number) => void; onDelete: (id: string) => void; deletingId: string | null;
+}) {
+  const filteredDays = ALL_DAYS.filter((d) => workingDays.includes(d.value));
+  const periods = useMemo(() => {
+    const set = new Set<number>();
+    for (const s of slots) if (s.periodNumber) set.add(s.periodNumber);
+    return Array.from(set).sort((a, b) => a - b);
+  }, [slots]);
+
+  const grid: Record<number, Record<number, any>> = {};
+  for (const s of slots) {
+    if (!grid[s.dayOfWeek]) grid[s.dayOfWeek] = {};
+    grid[s.dayOfWeek][s.periodNumber] = s;
+  }
+
+  if (periods.length === 0) return null;
+
+  return (
+    <div className="overflow-x-auto rounded-2xl border border-gray-100">
+      <div className="min-w-[640px] grid gap-px bg-gray-200" style={{ gridTemplateColumns: `52px repeat(${filteredDays.length}, 1fr)` }}>
+        <div className="bg-gray-100 px-2 py-2.5 text-[10px] font-bold text-gray-500 uppercase tracking-wider text-center">Per</div>
+        {filteredDays.map((d) => (
+          <div key={d.value} className="bg-gray-100 px-2 py-2.5 text-xs font-bold text-gray-700 text-center">{d.short}</div>
+        ))}
+        {periods.map((p) => (
+          <>
+            <div key={`p-${p}`} className="bg-white px-2 py-3 flex items-center justify-center text-xs font-bold text-gray-400">P{p}</div>
+            {filteredDays.map((d) => {
+              const slot = grid[d.value]?.[p];
+              if (!slot) {
+                return (
+                  <div key={`${d.value}-${p}`} className="bg-white p-1 min-h-[68px] flex items-center justify-center">
+                    <button onClick={() => onAdd(d.value)} className="text-[10px] text-gray-300 hover:text-blue-500 hover:bg-blue-50 rounded-lg px-2 py-1 transition-colors">+ Add</button>
+                  </div>
+                );
+              }
+              return (
+                <div key={slot.id} className="bg-white p-1.5 min-h-[68px] group relative hover:bg-blue-50/30 transition-colors">
+                  <div className="flex items-start justify-between gap-0.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-gray-900 leading-tight truncate">{slot.subjectName}</p>
+                      <p className="text-[10px] text-indigo-600 truncate">{slot.sectionName}</p>
+                      {slot.teacherName && <p className="text-[10px] text-emerald-600 truncate">{slot.teacherName}</p>}
+                      {slot.roomNo && <p className="text-[10px] text-gray-400 truncate">{slot.roomNo}</p>}
+                    </div>
+                    <button onClick={() => onDelete(slot.id)} disabled={deletingId === slot.id}
+                      className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 text-gray-300 hover:text-rose-500 rounded transition-all">
+                      {deletingId === slot.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Tab: Class Timetable ──────────────────────────────────────────────────────
+type ViewMode = "day" | "grid";
 function ClassTimetableTab({ resources, slots, workingDays, onRefresh }: { resources: any; slots: any[]; workingDays: number[]; onRefresh: () => void }) {
   const [addDay, setAddDay] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [filterSectionId, setFilterSectionId] = useState<string>("");
+  const [viewMode, setViewMode] = useState<ViewMode>("day");
   const classSlots = slots.filter((s) => s.subjectCode !== "__duty__");
+  const filteredSlots = filterSectionId
+    ? classSlots.filter((s) => s.sectionId === filterSectionId)
+    : classSlots;
   const stats = {
-    total: classSlots.length,
-    withTeacher: classSlots.filter((s) => s.teacherName).length,
+    total: filteredSlots.length,
+    withTeacher: filteredSlots.filter((s) => s.teacherName).length,
     sections: new Set(classSlots.map((s) => s.sectionId)).size,
   };
   const del = async (id: string) => {
@@ -391,11 +459,37 @@ function ClassTimetableTab({ resources, slots, workingDays, onRefresh }: { resou
   return (
     <div className="space-y-4">
       {addDay !== null && <AddClassSlotModal resources={resources} dayOfWeek={addDay} isLab={false} onClose={() => setAddDay(null)} onAdded={() => { setAddDay(null); onRefresh(); }} />}
+      {/* Controls bar */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl px-2 py-1">
+            <LayoutGrid className="w-3.5 h-3.5 text-gray-400" />
+            <select value={filterSectionId} onChange={(e) => setFilterSectionId(e.target.value)}
+              className="text-sm border-0 outline-none bg-transparent py-1 pr-2 text-gray-700 font-medium">
+              <option value="">All Sections</option>
+              {(resources.sections ?? []).map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="bg-white border border-gray-200 rounded-xl p-0.5 flex">
+            <button onClick={() => setViewMode("day")}
+              className={cn("px-3 py-1.5 text-xs font-medium rounded-lg transition-colors", viewMode === "day" ? "bg-blue-600 text-white shadow-sm" : "text-gray-500 hover:text-gray-700")}>
+              Day
+            </button>
+            <button onClick={() => setViewMode("grid")}
+              className={cn("px-3 py-1.5 text-xs font-medium rounded-lg transition-colors", viewMode === "grid" ? "bg-blue-600 text-white shadow-sm" : "text-gray-500 hover:text-gray-700")}>
+              Grid
+            </button>
+          </div>
+        </div>
+      </div>
+      {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: "Total Periods", value: stats.total,              icon: Clock,    color: "text-blue-600 bg-blue-50" },
-          { label: "With Teacher",  value: `${stats.withTeacher}/${stats.total}`, icon: Users, color: "text-emerald-600 bg-emerald-50" },
-          { label: "Sections",      value: stats.sections,           icon: BookOpen, color: "text-indigo-600 bg-indigo-50" },
+          { label: filterSectionId ? "Periods" : "Total Periods", value: stats.total, icon: Clock, color: "text-blue-600 bg-blue-50" },
+          { label: "With Teacher", value: `${stats.withTeacher}/${stats.total}`, icon: Users, color: "text-emerald-600 bg-emerald-50" },
+          { label: "Sections", value: filterSectionId ? "1" : stats.sections, icon: BookOpen, color: "text-indigo-600 bg-indigo-50" },
         ].map((s) => { const Icon = s.icon; return (
           <div key={s.label} className="bg-white rounded-xl border border-gray-100 p-4 flex items-center gap-3">
             <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center shrink-0", s.color)}><Icon className="w-4 h-4" /></div>
@@ -403,13 +497,19 @@ function ClassTimetableTab({ resources, slots, workingDays, onRefresh }: { resou
           </div>
         ); })}
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {ALL_DAYS.filter((d) => workingDays.includes(d.value)).map((day) => (
-          <DayColumn key={day.value} day={day}
-            slots={classSlots.filter((s) => s.dayOfWeek === day.value)}
-            onAdd={() => setAddDay(day.value)} onDelete={del} deletingId={deletingId} />
-        ))}
-      </div>
+      {/* View */}
+      {viewMode === "day" ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {ALL_DAYS.filter((d) => workingDays.includes(d.value)).map((day) => (
+            <DayColumn key={day.value} day={day}
+              slots={filteredSlots.filter((s) => s.dayOfWeek === day.value)}
+              onAdd={() => setAddDay(day.value)} onDelete={del} deletingId={deletingId} />
+          ))}
+        </div>
+      ) : (
+        <GridTimetableView slots={filteredSlots} workingDays={workingDays}
+          onAdd={(day) => setAddDay(day)} onDelete={del} deletingId={deletingId} />
+      )}
     </div>
   );
 }

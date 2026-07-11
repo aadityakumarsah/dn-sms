@@ -1316,6 +1316,7 @@ async function getStudents(req: Request, h: Headers, url: URL): Promise<Response
         gender: s.user.profile?.gender ?? null,
         dateOfBirth: s.user.profile?.dateOfBirth ?? null,
         avatar: s.user.profile?.avatar ?? null,
+        sectionId: enroll?.sectionId ?? null,
         className: enroll ? `${enroll.section.grade.name} ${enroll.section.name}` : null,
         rollNo: enroll?.rollNo ?? s.rollNumber ?? null,
         stream: s.stream ?? null,
@@ -2641,6 +2642,66 @@ async function createAssignment(req: Request, h: Headers): Promise<Response> {
 
 // ─── Student Portal ───────────────────────────────────────────────────────────
 
+async function studentProfile(req: Request, h: Headers): Promise<Response> {
+  try {
+    const u = await authSchool(req);
+    if (!u || u.role !== "student") return err("Unauthorized", 401, h);
+    const student = await prisma.student.findFirst({
+      where: { userId: u.id },
+      include: {
+        user: { include: { profile: true } },
+        busRoute: { select: { name: true } },
+        parentLinks: { include: { parent: { include: { user: { include: { profile: true } } } } } },
+      },
+    });
+    if (!student) return err("Student record not found", 404, h);
+    const enrollment = await prisma.studentEnrollment.findFirst({
+      where: { studentId: student.id, status: "ACTIVE" },
+      include: { section: { include: { grade: true } }, academicYear: true },
+      orderBy: { enrolledAt: "desc" },
+    });
+    const shifts = enrollment ? await prisma.timetableSlot.findMany({
+      where: { sectionId: enrollment.sectionId },
+      select: { shift: true },
+      distinct: ["shift"],
+    }) : [];
+    const profile = student.user.profile;
+    const parentInfo = student.parentLinks.map((pl) => ({
+      name: pl.parent.user.profile ? `${pl.parent.user.profile.firstName} ${pl.parent.user.profile.lastName}`.trim() : pl.parent.user.email,
+      email: pl.parent.user.email,
+      phone: pl.parent.user.profile?.phone ?? null,
+      relationship: pl.relationship,
+      occupation: pl.parent.occupation,
+    }));
+    return json({
+      id: student.id,
+      admissionNo: student.admissionNo,
+      rollNumber: enrollment?.rollNo ?? student.rollNumber ?? null,
+      stream: student.stream ?? null,
+      transportMode: student.transportMode,
+      busRoute: student.busRoute?.name ?? null,
+      createdAt: student.createdAt,
+      email: student.user.email,
+      firstName: profile?.firstName ?? null,
+      lastName: profile?.lastName ?? null,
+      phone: profile?.phone ?? null,
+      gender: profile?.gender ?? null,
+      dateOfBirth: profile?.dateOfBirth ?? null,
+      address: profile?.address ?? null,
+      avatar: profile?.avatar ?? null,
+      className: enrollment ? `${enrollment.section.grade.name} ${enrollment.section.name}` : null,
+      gradeName: enrollment?.section?.grade?.name ?? null,
+      sectionName: enrollment?.section?.name ?? null,
+      academicYear: enrollment?.academicYear?.name ?? null,
+      shifts: shifts.map((s) => s.shift),
+      parents: parentInfo,
+    }, 200, h);
+  } catch (e) {
+    console.error("studentProfile error:", e);
+    return err("Failed to load profile", 500, h);
+  }
+}
+
 async function studentDashboard(req: Request, h: Headers): Promise<Response> {
   const u = await authSchool(req);
   if (!u || u.role !== "student") return err("Unauthorized", 401, h);
@@ -3867,6 +3928,17 @@ async function deleteNotification(req: Request, h: Headers, id: string): Promise
   return json({ ok: true }, 200, h);
 }
 
+async function getNotificationsForRole(req: Request, h: Headers, role: string): Promise<Response> {
+  const u = await authSchool(req);
+  if (!u) return err("Unauthorized", 401, h);
+  const list = await prisma.notification.findMany({
+    where: { schoolId: u.schoolId, OR: [{ targetRole: null }, { targetRole: role }] },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  return json(list, 200, h);
+}
+
 // ─── Routine (Timetable) ──────────────────────────────────────────────────────
 async function ensureActiveTimetable(schoolId: string): Promise<string | null> {
   const ay = await prisma.academicYear.findFirst({ where: { schoolId, isActive: true } });
@@ -4241,9 +4313,9 @@ async function getDIStudents(req: Request, h: Headers, url: URL): Promise<Respon
 function routineSlotJson(s: any) {
   return {
     id: s.id, sectionId: s.sectionId, subjectId: s.subjectId, teacherId: s.teacherId,
-    sectionName: s.section ? `${s.section.grade.name} ${s.section.name}` : null,
+    sectionName: s.section?.grade ? `${s.section.grade.name} ${s.section.name}` : s.section?.name ?? null,
     subjectName: s.subject?.name ?? null,
-    teacherName: s.teacher?.user?.profile ? `${s.teacher.user.profile.firstName} ${s.teacher.user.profile.lastName}`.trim() : (s.teacher ? s.teacher.user.email : null),
+    teacherName: s.teacher?.user?.profile ? `${s.teacher.user.profile.firstName} ${s.teacher.user.profile.lastName}`.trim() : s.teacher?.user?.email ?? null,
     dayOfWeek: s.dayOfWeek, periodNumber: s.periodNumber, startTime: s.startTime, endTime: s.endTime,
     roomNo: s.roomNo, shift: s.shift, materials: s.materials,
   };
@@ -4251,51 +4323,69 @@ function routineSlotJson(s: any) {
 
 // Student sees their own section's routine.
 async function studentRoutine(req: Request, h: Headers): Promise<Response> {
-  const u = await authSchool(req);
-  if (!u || u.role !== "student") return err("Unauthorized", 401, h);
-  const student = await prisma.student.findFirst({ where: { userId: u.id } });
-  if (!student) return err("Student profile not found", 404, h);
-  const enrollment = await prisma.studentEnrollment.findFirst({ where: { studentId: student.id, status: "ACTIVE" }, orderBy: { enrolledAt: "desc" } });
-  if (!enrollment) return json([], 200, h);
-  const slots = await prisma.timetableSlot.findMany({
-    where: { sectionId: enrollment.sectionId },
-    include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
-    orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
-  });
-  return json(slots.map(routineSlotJson), 200, h);
+  try {
+    const u = await authSchool(req);
+    if (!u || u.role !== "student") return err("Unauthorized", 401, h);
+    const student = await prisma.student.findFirst({ where: { userId: u.id } });
+    if (!student) return json({ slots: [], enrolled: false, reason: "no_profile" }, 200, h);
+    const enrollment = await prisma.studentEnrollment.findFirst({ where: { studentId: student.id, status: "ACTIVE" }, orderBy: { enrolledAt: "desc" } });
+    if (!enrollment) return json({ slots: [], enrolled: false, reason: "no_enrollment" }, 200, h);
+    const activeTt = await prisma.timetable.findFirst({ where: { academicYear: { schoolId: u.schoolId, isActive: true }, isActive: true } });
+    const slots = await prisma.timetableSlot.findMany({
+      where: { sectionId: enrollment.sectionId, ...(activeTt ? { timetableId: activeTt.id } : {}) },
+      include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
+      orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+    });
+    return json({ slots: slots.map(routineSlotJson), enrolled: true, reason: null, sectionName: enrollment.section?.grade ? `${enrollment.section.grade.name} ${enrollment.section.name}` : null, className: enrollment.className }, 200, h);
+  } catch (e) {
+    console.error("studentRoutine error:", e);
+    return json({ slots: [], enrolled: false, reason: "error" }, 200, h);
+  }
 }
 
 // Parent sees a chosen child's section routine (validates the child belongs to this parent).
 async function parentRoutine(req: Request, h: Headers, url: URL): Promise<Response> {
-  const u = await authSchool(req);
-  if (!u || u.role !== "parent") return err("Unauthorized", 401, h);
-  const parent = await prisma.parent.findFirst({ where: { userId: u.id }, include: { children: true } });
-  if (!parent) return err("Parent profile not found", 404, h);
-  const childId = url.searchParams.get("childId");
-  const link = childId ? parent.children.find((c) => c.studentId === childId) : parent.children[0];
-  if (!link) return json([], 200, h);
-  const enrollment = await prisma.studentEnrollment.findFirst({ where: { studentId: link.studentId, status: "ACTIVE" }, orderBy: { enrolledAt: "desc" } });
-  if (!enrollment) return json([], 200, h);
-  const slots = await prisma.timetableSlot.findMany({
-    where: { sectionId: enrollment.sectionId },
-    include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
-    orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
-  });
-  return json(slots.map(routineSlotJson), 200, h);
+  try {
+    const u = await authSchool(req);
+    if (!u || u.role !== "parent") return err("Unauthorized", 401, h);
+    const parent = await prisma.parent.findFirst({ where: { userId: u.id }, include: { children: true } });
+    if (!parent) return err("Parent profile not found", 404, h);
+    const childId = url.searchParams.get("childId");
+    const link = childId ? parent.children.find((c) => c.studentId === childId) : parent.children[0];
+    if (!link) return json([], 200, h);
+    const enrollment = await prisma.studentEnrollment.findFirst({ where: { studentId: link.studentId, status: "ACTIVE" }, orderBy: { enrolledAt: "desc" } });
+    if (!enrollment) return json([], 200, h);
+    const activeTt = await prisma.timetable.findFirst({ where: { academicYear: { schoolId: u.schoolId, isActive: true }, isActive: true } });
+    const slots = await prisma.timetableSlot.findMany({
+      where: { sectionId: enrollment.sectionId, ...(activeTt ? { timetableId: activeTt.id } : {}) },
+      include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
+      orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+    });
+    return json(slots.map(routineSlotJson), 200, h);
+  } catch (e) {
+    console.error("parentRoutine error:", e);
+    return json([], 200, h);
+  }
 }
 
 // Teacher sees their own periods across all sections.
 async function teacherRoutine(req: Request, h: Headers): Promise<Response> {
-  const u = await authSchool(req);
-  if (!u || u.role !== "teacher") return err("Unauthorized", 401, h);
-  const teacher = await prisma.teacher.findFirst({ where: { userId: u.id } });
-  if (!teacher) return err("Teacher profile not found", 404, h);
-  const slots = await prisma.timetableSlot.findMany({
-    where: { teacherId: teacher.id },
-    include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
-    orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
-  });
-  return json(slots.map(routineSlotJson), 200, h);
+  try {
+    const u = await authSchool(req);
+    if (!u || u.role !== "teacher") return err("Unauthorized", 401, h);
+    const teacher = await prisma.teacher.findFirst({ where: { userId: u.id } });
+    if (!teacher) return err("Teacher profile not found", 404, h);
+    const activeTt = await prisma.timetable.findFirst({ where: { academicYear: { schoolId: u.schoolId, isActive: true }, isActive: true } });
+    const slots = await prisma.timetableSlot.findMany({
+      where: { teacherId: teacher.id, ...(activeTt ? { timetableId: activeTt.id } : {}) },
+      include: { section: { include: { grade: true } }, subject: true, teacher: { include: { user: { include: { profile: true } } } } },
+      orderBy: [{ dayOfWeek: "asc" }, { periodNumber: "asc" }],
+    });
+    return json(slots.map(routineSlotJson), 200, h);
+  } catch (e) {
+    console.error("teacherRoutine error:", e);
+    return json([], 200, h);
+  }
 }
 
 // ─── Fee Structures / Installment plans ─────────────────────────────────────────
@@ -5357,6 +5447,8 @@ Bun.serve({
     if (routineMatch && req.method === "DELETE") return deleteRoutineSlot(req, h, routineMatch[1]);
 
     // Staff / Schedule Manager routes
+    if (p === "/api/staff/notices") return getNotices(req, h);
+    if (p === "/api/staff/notifications") return getNotificationsForRole(req, h, "STAFF");
     if (p === "/api/staff/schedule/resources") return getScheduleResources(req, h);
     if (p === "/api/staff/schedule/teachers-free") return getTeachersAvailability(req, h, url);
     if (p === "/api/staff/schedule/duties") {
@@ -5529,15 +5621,18 @@ Bun.serve({
     }
     if (p === "/api/teacher/attendance/mark" && req.method === "POST") return markAttendance(req, h);
     if (p === "/api/teacher/notices") return getNotices(req, h);
+    if (p === "/api/teacher/notifications") return getNotificationsForRole(req, h, "TEACHER");
     if (p === "/api/teacher/routine") return teacherRoutine(req, h);
     if (p === "/api/teacher/exams") return getTeacherExams(req, h);
 
     // ── Student Portal ──────────────────────────────────────────────────────
+    if (p === "/api/student/profile") return studentProfile(req, h);
     if (p === "/api/student/dashboard") return studentDashboard(req, h);
     if (p === "/api/student/attendance") return getStudentAttendance(req, h, url);
     if (p === "/api/student/results") return getStudentResults(req, h);
     if (p === "/api/student/fees") return getStudentFees(req, h);
     if (p === "/api/student/notices") return getNotices(req, h);
+    if (p === "/api/student/notifications") return getNotificationsForRole(req, h, "STUDENT");
     if (p === "/api/student/subjects") return getSubjects(req, h);
     if (p === "/api/student/routine") return studentRoutine(req, h);
     if (p === "/api/student/exams") return getStudentExams(req, h);
@@ -5545,6 +5640,7 @@ Bun.serve({
     // ── Parent Portal ───────────────────────────────────────────────────────
     if (p === "/api/parent/dashboard") return parentDashboard(req, h);
     if (p === "/api/parent/notices") return getNotices(req, h);
+    if (p === "/api/parent/notifications") return getNotificationsForRole(req, h, "PARENT");
     if (p === "/api/parent/results") return getParentResults(req, h);
     if (p === "/api/parent/fees") return getParentFees(req, h);
     if (p === "/api/parent/attendance") return getParentAttendance(req, h);

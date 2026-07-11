@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Bell, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import NoticesFeed from "@/components/notifications/NoticesFeed";
@@ -12,8 +12,8 @@ export default function Notices() {
   const load = async () => {
     setLoading(true);
     const [n, notifs] = await Promise.all([
-      api.parent.notices().catch(() => []),
-      api.parent.notifications().catch(() => []),
+      api.teacher.notices().catch(() => []),
+      api.teacher.notifications().catch(() => []),
     ]);
     setNotices(n ?? []);
     setNotifications(notifs ?? []);
@@ -27,7 +27,7 @@ export default function Notices() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Notices & Announcements</h1>
-          <p className="text-sm text-gray-500 mt-0.5">School notices, announcements, and updates for parents</p>
+          <p className="text-sm text-gray-500 mt-0.5">School notices, announcements, and updates for teachers</p>
         </div>
         <button onClick={load} disabled={loading} className="p-2 border border-gray-200 rounded-xl text-gray-400 hover:bg-gray-50 disabled:opacity-50 shrink-0">
           <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
