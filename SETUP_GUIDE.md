@@ -21,18 +21,33 @@ bun install
 
 ### 2. Environment Setup
 
-Create `.env` in `/server`:
+Copy the example env files:
+```bash
+cp server/.env.example server/.env
+cp client/.env.example client/.env
+```
+
+Or create manually:
+
+`server/.env`:
 ```env
 DATABASE_URL="postgresql://user:password@localhost:5432/dn_sms"
+DIRECT_URL="postgresql://user:password@localhost:5432/dn_sms"
 JWT_SECRET="your-secret-key-minimum-32-characters-long-please"
 PORT=4000
 FRONTEND_URL="http://localhost:3000"
 NODE_ENV="development"
+SUPER_ADMIN_EMAIL=admin@school.com
+SUPER_ADMIN_NAME="DN-SMS Super Admin"
+SUPER_ADMIN_PASSWORD=your-super-admin-password
+CLOUDNARY_NAME=your-cloudinary-cloud-name
+CLOUDNARY_API_KEY=your-cloudinary-api-key
+CLOUDNARY_API_SECRET=your-cloudinary-api-secret
 ```
 
-Create `.env` in `/client`:
+`client/.env`:
 ```env
-VITE_API_URL="http://localhost:4000"
+PUBLIC_API_URL="http://localhost:4000"
 ```
 
 ### 3. Database Setup
@@ -280,11 +295,15 @@ chmod +x test-auth.sh
 Set these on your production server:
 
 ```bash
-export DATABASE_URL="postgresql://prod_user:prod_pass@prod_host:5432/dn_sms_prod"
+export DATABASE_URL="postgresql://prod_user:prod_pass@prod_host:5432/dn_sms_prod?pgbouncer=true"
+export DIRECT_URL="postgresql://prod_user:prod_pass@prod_host:5432/dn_sms_prod"
 export JWT_SECRET="generate-a-long-random-string-minimum-32-chars"
 export PORT=4000
 export FRONTEND_URL="https://app.dn-sms.edu.np"
 export NODE_ENV="production"
+export CLOUDNARY_NAME=your-cloudinary-cloud-name
+export CLOUDNARY_API_KEY=your-cloudinary-api-key
+export CLOUDNARY_API_SECRET=your-cloudinary-api-secret
 ```
 
 ### 2. Database Migrations

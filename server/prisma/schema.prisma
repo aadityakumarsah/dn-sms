@@ -334,6 +334,7 @@ model Section {
   attendances        StudentAttendance[]
   timetableSlots     TimetableSlot[]
   subjectAssignments SubjectAssignment[]
+  teacherAssignments TeacherSubjectAssignment[]
 }
 
 enum SectionPerformance {
@@ -556,6 +557,7 @@ model TeacherSubjectAssignment {
 
   teacher Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  section  Section? @relation(fields: [sectionId], references: [id], onDelete: Cascade)
 }
 
 model SubjectAssignment {

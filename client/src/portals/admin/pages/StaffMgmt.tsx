@@ -1,21 +1,23 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Search, X, RefreshCw, Users, Trash2, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import ImageUpload from "@/components/common/ImageUpload";
 import EditDrawer from "./_EditDrawer";
 
 // Non-teaching staff designations.
 const DESIGNATIONS = ["Accountant", "Librarian", "Cleaner", "Security Guard", "Receptionist", "Lab Assistant", "Office Assistant", "Driver", "Helper", "Cook", "Gardener", "IT Support", "Nurse", "Store Keeper", "Schedule Manager", "DI"];
 const dummyAvatar = (name: string) => `https://ui-avatars.com/api/?name=${encodeURIComponent(name || "Staff")}&background=random&size=128`;
 
-function StaffModal({ open, onClose, onSave }: { open: boolean; onClose: () => void; onSave: (d: any) => Promise<void> }) {
+function StaffModal({ open, onClose, onSave, onReload }: { open: boolean; onClose: () => void; onSave: (d: any) => Promise<any>; onReload?: () => void }) {
   const blank = { firstName: "", lastName: "", email: "", phone: "", designation: "Accountant", employeeId: "", salary: "", joinDate: "", gender: "MALE", avatar: "" };
   const [form, setForm] = useState(blank);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const pendingUpload = useRef<Promise<string> | null>(null);
 
-  useEffect(() => { setForm(blank); setError(""); }, [open]);
+  useEffect(() => { setForm(blank); setError(""); pendingUpload.current = null; }, [open]);
   if (!open) return null;
 
   const field = "w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400";
@@ -23,7 +25,15 @@ function StaffModal({ open, onClose, onSave }: { open: boolean; onClose: () => v
     if (!form.firstName || !form.email) { setError("First name and email are required"); return; }
     if (!form.designation) { setError("Designation is required"); return; }
     setSaving(true); setError("");
-    try { await onSave({ ...form, salary: form.salary || null, joinDate: form.joinDate || null }); onClose(); }
+    try {
+      let avatarUrl = form.avatar;
+      if (pendingUpload.current) {
+        try { const url = await pendingUpload.current; if (url) avatarUrl = url; } catch { /* upload failed, proceed without avatar */ }
+      }
+      await onSave({ ...form, avatar: avatarUrl, salary: form.salary || null, joinDate: form.joinDate || null });
+      onClose();
+      onReload?.();
+    }
     catch (e: any) { setError(e.message); }
     finally { setSaving(false); }
   };
@@ -38,13 +48,7 @@ function StaffModal({ open, onClose, onSave }: { open: boolean; onClose: () => v
         </div>
         <div className="p-6 space-y-4">
           {error && <div className="p-3 bg-rose-50 text-rose-600 text-sm rounded-xl">{error}</div>}
-          <div className="flex items-center gap-4">
-            <img src={form.avatar || dummyAvatar(`${form.firstName} ${form.lastName}`)} alt="avatar" className="w-16 h-16 rounded-2xl object-cover border border-gray-100" />
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Photo URL <span className="text-gray-300">(dummy if blank)</span></label>
-              <input value={form.avatar} onChange={(e) => setForm({ ...form, avatar: e.target.value })} placeholder="https://… (Cloudinary later)" className={field} />
-            </div>
-          </div>
+          <ImageUpload value={form.avatar} onChange={(url) => setForm({ ...form, avatar: url })} name={`${form.firstName} ${form.lastName}`} onUploadStart={(p) => { pendingUpload.current = p; }} />
           <div className="grid grid-cols-2 gap-4">
             <div><label className="block text-xs font-medium text-gray-600 mb-1.5">First Name *</label><input value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} className={field} /></div>
             <div><label className="block text-xs font-medium text-gray-600 mb-1.5">Last Name</label><input value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} className={field} /></div>
@@ -179,7 +183,7 @@ export default function StaffMgmt() {
         </div>
       )}
 
-      <StaffModal open={modal} onClose={() => setModal(false)} onSave={async (d) => { try { await api.admin.createStaff(d); } finally { load(); } }} />
+      <StaffModal open={modal} onClose={() => setModal(false)} onSave={async (d) => { return await api.admin.createStaff(d).catch((e) => { throw e; }); }} onReload={load} />
 
       {editUserId && (
         <EditDrawer userId={editUserId} onClose={() => setEditUserId(null)} onSaved={() => { setEditUserId(null); load(); }} />
