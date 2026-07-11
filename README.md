@@ -56,6 +56,11 @@ DN-SMS is an enterprise-grade school management solution that supports multiple 
 - Bus routes management
 - Bus allocation and tracking
 
+### 🖼️ Media Management
+- Profile photo upload via Cloudinary
+- Background image upload with instant save
+- Automatic old-image cleanup on replacement
+
 ### 📢 Communication
 - School announcements
 - Platform-level announcements
@@ -86,6 +91,7 @@ DN-SMS is an enterprise-grade school management solution that supports multiple 
 - **ORM**: Prisma v7
 - **Database**: PostgreSQL
 - **Authentication**: JWT (jose)
+- **Image Storage**: Cloudinary
 - **Language**: TypeScript
 
 ### Database
@@ -161,10 +167,19 @@ dn-sms/
 
 2. **Setup environment variables**
    
-   Create `.env` in the `server/` directory:
+   Copy the example env files and edit as needed:
+   ```bash
+   cp server/.env.example server/.env
+   cp client/.env.example client/.env
+   ```
+
+   Configure at minimum these values in `server/.env`:
    ```env
    DATABASE_URL="postgresql://user:password@localhost:5432/dn_sms"
    JWT_SECRET="your-secret-key-here"
+   CLOUDNARY_NAME=your-cloudinary-cloud-name
+   CLOUDNARY_API_KEY=your-cloudinary-api-key
+   CLOUDNARY_API_SECRET=your-cloudinary-api-secret
    ```
 
 3. **Install dependencies**
@@ -367,15 +382,23 @@ bun prisma studio
 
 ### Server (.env)
 ```env
-DATABASE_URL=postgresql://user:password@host:port/database
+DATABASE_URL=postgresql://user:password@host:port/database?pgbouncer=true
+DIRECT_URL=postgresql://user:password@host:port/database
 JWT_SECRET=your-jwt-secret-key
+PORT=4000
+FRONTEND_URL=http://localhost:3000
 NODE_ENV=production
-PORT=3001
+SUPER_ADMIN_EMAIL=admin@school.com
+SUPER_ADMIN_NAME="DN-SMS Super Admin"
+SUPER_ADMIN_PASSWORD=your-password
+CLOUDNARY_NAME=your-cloudinary-cloud-name
+CLOUDNARY_API_KEY=your-cloudinary-api-key
+CLOUDNARY_API_SECRET=your-cloudinary-api-secret
 ```
 
 ### Client (.env)
 ```env
-VITE_API_URL=http://localhost:3001/api
+PUBLIC_API_URL=http://localhost:4000
 ```
 
 ## 🤝 Contributing

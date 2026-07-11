@@ -378,7 +378,7 @@ JWT_SECRET=your-secret-key-min-32-chars
 PORT=4000
 
 # Frontend
-VITE_API_URL=http://localhost:4000
+PUBLIC_API_URL=http://localhost:4000
 ```
 
 ## ✅ Testing
