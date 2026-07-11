@@ -11,6 +11,13 @@ import {
   getCurrentUser,
 } from "./auth.handlers.ts";
 import { hashPassword } from "./auth.utils.ts";
+import { v2 as cloudinary } from "cloudinary";
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDNARY_NAME,
+  api_key: process.env.CLOUDNARY_API_KEY,
+  api_secret: process.env.CLOUDNARY_API_SECRET,
+});
 
 const adapter = new PrismaPg({
   connectionString: process.env.DATABASE_URL!,
@@ -98,6 +105,51 @@ async function maybeRefreshToken(payload: Record<string, unknown>, h: Headers): 
     const { iat: _iat, exp: _exp, ...rest } = payload;
     const fresh = await signToken(rest);
     h.set("X-Refresh-Token", fresh);
+  }
+}
+
+function publicIdFromCloudinaryUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split("/");
+    const uploadIdx = parts.indexOf("upload");
+    if (uploadIdx === -1) return null;
+    const afterUpload = parts.slice(uploadIdx + 1).filter((s) => !/^v\d+$/.test(s)).join("/");
+    return afterUpload.replace(/\.[^.]+$/, "");
+  } catch { return null; }
+}
+
+async function deleteCloudinaryImage(url: string): Promise<void> {
+  const publicId = publicIdFromCloudinaryUrl(url);
+  if (!publicId) return;
+  try {
+    await cloudinary.uploader.destroy(publicId);
+  } catch (e) {
+    console.error("Cloudinary delete error:", e);
+  }
+}
+
+async function handleUpload(req: Request, h: Headers): Promise<Response> {
+  const user = await authSchoolUser(req, h);
+  if (!user) return err("Unauthorized", 401, h);
+
+  const formData = await req.formData();
+  const file = formData.get("file") as File | null;
+  if (!file || file.size === 0) return err("No file provided", 400, h);
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const base64 = buffer.toString("base64");
+  const dataUri = `data:${file.type};base64,${base64}`;
+
+  try {
+    const result = await cloudinary.uploader.upload(dataUri, {
+      folder: "dn-sms",
+      resource_type: "image",
+    });
+    return json({ url: result.secure_url }, 200, h);
+  } catch (e: any) {
+    console.error("Cloudinary upload error:", e);
+    return err(e?.message ?? "Upload failed", 500, h);
   }
 }
 
@@ -1467,6 +1519,12 @@ async function updateStudent(req: Request, h: Headers, id: string): Promise<Resp
   if (body.otherFee !== undefined) studentData.otherFee = body.otherFee === "" || body.otherFee === null ? null : Number(body.otherFee);
   if (Object.keys(studentData).length) await prisma.student.update({ where: { id }, data: studentData });
 
+  const oldAvatar = student.user.profile?.avatar;
+  const newAvatar = body.avatar !== undefined ? body.avatar : oldAvatar;
+  if (oldAvatar && newAvatar !== oldAvatar && oldAvatar.includes("cloudinary")) {
+    await deleteCloudinaryImage(oldAvatar).catch(() => {});
+  }
+
   await prisma.userProfile.update({
     where: { userId: student.userId },
     data: {
@@ -1476,7 +1534,7 @@ async function updateStudent(req: Request, h: Headers, id: string): Promise<Resp
       gender: body.gender ?? student.user.profile?.gender,
       dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : student.user.profile?.dateOfBirth,
       address: body.address ?? student.user.profile?.address,
-      avatar: body.avatar !== undefined ? body.avatar : student.user.profile?.avatar,
+      avatar: newAvatar,
     },
   });
 
@@ -1634,8 +1692,13 @@ async function updateTeacher(req: Request, h: Headers, id: string): Promise<Resp
   if (!teacher) return err("Not found", 404, h);
   const body = await req.json().catch(() => null);
   if (!body) return err("No data", 400, h);
+  const oldAvatar = teacher.user.profile?.avatar;
+  const newAvatar = body.avatar !== undefined ? body.avatar : oldAvatar;
+  if (oldAvatar && newAvatar !== oldAvatar && oldAvatar.includes("cloudinary")) {
+    await deleteCloudinaryImage(oldAvatar).catch(() => {});
+  }
   await Promise.all([
-    prisma.userProfile.update({ where: { userId: teacher.userId }, data: { firstName: body.firstName, lastName: body.lastName, phone: body.phone, gender: body.gender } }),
+    prisma.userProfile.update({ where: { userId: teacher.userId }, data: { firstName: body.firstName, lastName: body.lastName, phone: body.phone, gender: body.gender, avatar: newAvatar } }),
     prisma.teacher.update({ where: { id }, data: {
       qualification: body.qualification, experience: body.experience, specialization: body.specialization,
       ...(body.salary !== undefined ? { salary: body.salary === "" || body.salary === null ? null : Number(body.salary) } : {}),
@@ -1748,12 +1811,17 @@ async function updateStaff(req: Request, h: Headers, id: string): Promise<Respon
   const staff = await prisma.staff.findFirst({ where: { id, schoolId: u.schoolId }, include: { user: { include: { profile: true } } } });
   if (!staff) return err("Staff not found", 404, h);
   const body = await req.json().catch(() => null);
+  const oldAvatar = staff.user.profile?.avatar;
+  const newAvatar = body?.avatar !== undefined ? body.avatar : oldAvatar;
+  if (oldAvatar && newAvatar !== oldAvatar && oldAvatar.includes("cloudinary")) {
+    await deleteCloudinaryImage(oldAvatar).catch(() => {});
+  }
   await prisma.userProfile.update({ where: { userId: staff.userId }, data: {
     firstName: body?.firstName ?? staff.user.profile?.firstName,
     lastName: body?.lastName ?? staff.user.profile?.lastName,
     phone: body?.phone ?? staff.user.profile?.phone,
     gender: body?.gender ?? staff.user.profile?.gender,
-    avatar: body?.avatar !== undefined ? body.avatar : staff.user.profile?.avatar,
+    avatar: newAvatar,
   } });
   await prisma.staff.update({ where: { id }, data: {
     designation: body?.designation ?? staff.designation,
@@ -5082,6 +5150,9 @@ Bun.serve({
 
     // Health
     if (p === "/health") return json({ ok: true, ts: new Date().toISOString() }, 200, h);
+
+    // Image upload (auth required)
+    if (p === "/api/upload" && req.method === "POST") return handleUpload(req, h);
 
     // Public school directory (no auth) — for "Find your school" + branded login
     if (p === "/api/public/schools" && req.method === "GET") return getPublicSchools(req, h, url);

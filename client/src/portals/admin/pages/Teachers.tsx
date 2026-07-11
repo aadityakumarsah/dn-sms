@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Plus, Edit3, Trash2, X, RefreshCw, Mail, Phone, Copy, CheckCheck, Key } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import ImageUpload from "@/components/common/ImageUpload";
 
 function CredField({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
@@ -140,8 +141,6 @@ const STATUS_BADGE: Record<string, string> = {
   INACTIVE: "bg-gray-100 text-gray-500",
   SUSPENDED: "bg-rose-50 text-rose-600",
 };
-const dummyAvatar = (name: string) => `https://ui-avatars.com/api/?name=${encodeURIComponent(name || "Teacher")}&background=random&size=128`;
-
 // Extracted outside TeacherModal so React doesn't remount inputs on every re-render (fixes focus loss bug)
 function FormField({ label, k, type = "text", placeholder = "", form, setForm }: {
   label: string; k: string; type?: string; placeholder?: string;
@@ -156,10 +155,11 @@ function FormField({ label, k, type = "text", placeholder = "", form, setForm }:
   );
 }
 
-function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClose: () => void; initial?: any; onSave: (d: any) => Promise<void> }) {
+function TeacherModal({ open, onClose, initial, onSave, onReload }: { open: boolean; onClose: () => void; initial?: any; onSave: (d: any) => Promise<string | null | undefined>; onReload?: () => void }) {
   const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "", password: "", salary: "", allowances: "0", deductions: "0" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const pendingUpload = useRef<Promise<string> | null>(null);
 
   useEffect(() => {
     if (initial) {
@@ -169,6 +169,7 @@ function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClo
       setForm({ firstName: "", lastName: "", email: "", phone: "", gender: "MALE", qualification: "", specialization: "", experience: "", joinDate: "", employeeId: "", avatar: "", password: "", salary: "", allowances: "0", deductions: "0" });
     }
     setError("");
+    pendingUpload.current = null;
   }, [initial, open]);
 
   if (!open) return null;
@@ -176,7 +177,15 @@ function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClo
   const handleSave = async () => {
     if (!form.firstName || !form.lastName || !form.email) { setError("First name, last name, and email are required"); return; }
     setSaving(true); setError("");
-    try { await onSave({ ...form, experience: form.experience ? parseInt(form.experience) : null }); onClose(); }
+    try {
+      let avatarUrl = form.avatar;
+      if (pendingUpload.current) {
+        try { const url = await pendingUpload.current; if (url) avatarUrl = url; } catch { /* upload failed, proceed without avatar */ }
+      }
+      await onSave({ ...form, avatar: avatarUrl, experience: form.experience ? parseInt(form.experience) : null });
+      onClose();
+      onReload?.();
+    }
     catch (e: any) { setError(e.message); }
     finally { setSaving(false); }
   };
@@ -191,13 +200,7 @@ function TeacherModal({ open, onClose, initial, onSave }: { open: boolean; onClo
         </div>
         <div className="p-6 space-y-4">
           {error && <div className="p-3 bg-rose-50 text-rose-600 text-sm rounded-xl">{error}</div>}
-          <div className="flex items-center gap-4">
-            <img src={form.avatar || dummyAvatar(`${form.firstName} ${form.lastName}`)} alt="avatar" className="w-16 h-16 rounded-2xl object-cover border border-gray-100" />
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Profile Photo URL <span className="text-gray-300">(demo URL, Cloudinary later)</span></label>
-              <input value={form.avatar} onChange={(e) => setForm({ ...form, avatar: e.target.value })} placeholder="https://…" className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
-          </div>
+          <ImageUpload value={form.avatar} onChange={(url) => setForm({ ...form, avatar: url })} name={`${form.firstName} ${form.lastName}`} onUploadStart={(p) => { pendingUpload.current = p; }} />
           <div className="grid grid-cols-2 gap-4">
             <FormField label="First Name *" k="firstName" form={form} setForm={setForm} />
             <FormField label="Last Name *" k="lastName" form={form} setForm={setForm} />
@@ -364,12 +367,13 @@ export default function Teachers() {
         onSave={async (d) => {
           if (editTeacher) {
             await api.admin.updateTeacher(editTeacher.id, d);
+            return editTeacher.id;
           } else {
             const result = await api.admin.createTeacher(d);
             if (result?.credentials) setCreatedCreds(result.credentials);
+            return result?.id ?? null;
           }
-          reload();
-        }} />
+        }} onReload={reload} />
 
       <CredentialsModal open={!!createdCreds} onClose={() => setCreatedCreds(null)} creds={createdCreds} />
 

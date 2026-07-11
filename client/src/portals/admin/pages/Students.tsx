@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Plus, Edit3, Trash2, ChevronLeft, ChevronRight, X, RefreshCw, GraduationCap, Bus, Footprints, Copy, CheckCheck, Key } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import ImageUpload from "@/components/common/ImageUpload";
 
 function CredField({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
@@ -73,14 +74,15 @@ const FEE_BADGE: Record<string, string> = {
 };
 const dummyAvatar = (name: string) => `https://ui-avatars.com/api/?name=${encodeURIComponent(name || "Student")}&background=random&size=128`;
 
-function StudentModal({ open, onClose, initial, sections, busRoutes, onSave }: {
+function StudentModal({ open, onClose, initial, sections, busRoutes, onSave, onReload }: {
   open: boolean; onClose: () => void; initial?: any;
-  sections: any[]; busRoutes: any[]; onSave: (d: any) => Promise<void>;
+  sections: any[]; busRoutes: any[]; onSave: (d: any) => Promise<any>; onReload?: () => void;
 }) {
   const blank = { firstName: "", lastName: "", email: "", phone: "", gender: "MALE", dateOfBirth: "", address: "", admissionNo: "", sectionId: "", rollNo: "", transportMode: "WALKING", busRouteId: "", avatar: "", class10Marks: "", entranceMarks: "", stream: "", password: "", feeAmount: "", feeRemarks: "", tuitionFee: "", busFee: "", otherFee: "", parentEmail: "", parentFirstName: "", parentLastName: "", parentPhone: "", parentOccupation: "", parentRelationship: "FATHER", parentPassword: "" };
   const [form, setForm] = useState<any>(blank);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const pendingUpload = useRef<Promise<string> | null>(null);
 
   useEffect(() => {
     if (initial) {
@@ -102,6 +104,7 @@ function StudentModal({ open, onClose, initial, sections, busRoutes, onSave }: {
       setForm(blank);
     }
     setError("");
+    pendingUpload.current = null;
   }, [initial, open]);
 
   if (!open) return null;
@@ -114,7 +117,15 @@ function StudentModal({ open, onClose, initial, sections, busRoutes, onSave }: {
     if (!form.firstName || !form.lastName || !form.email) { setError("First name, last name, and email are required"); return; }
     if (form.transportMode === "BUS" && !form.busRouteId) { setError("Select a bus route for bus students"); return; }
     setSaving(true); setError("");
-    try { await onSave(form); onClose(); }
+    try {
+      let avatarUrl = form.avatar;
+      if (pendingUpload.current) {
+        try { const url = await pendingUpload.current; if (url) avatarUrl = url; } catch { /* upload failed, proceed without avatar */ }
+      }
+      await onSave({ ...form, avatar: avatarUrl });
+      onClose();
+      onReload?.();
+    }
     catch (e: any) { setError(e.message); }
     finally { setSaving(false); }
   };
@@ -131,13 +142,7 @@ function StudentModal({ open, onClose, initial, sections, busRoutes, onSave }: {
         </div>
         <div className="p-6 space-y-4">
           {error && <div className="p-3 bg-rose-50 text-rose-600 text-sm rounded-xl">{error}</div>}
-          <div className="flex items-center gap-4">
-            <img src={form.avatar || dummyAvatar(`${form.firstName} ${form.lastName}`)} alt="avatar" className="w-16 h-16 rounded-2xl object-cover border border-gray-100" />
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Profile Photo URL <span className="text-gray-300">(dummy if blank)</span></label>
-              <input value={form.avatar} onChange={(e) => setForm({ ...form, avatar: e.target.value })} placeholder="https://… (Cloudinary later)" className={field} />
-            </div>
-          </div>
+          <ImageUpload value={form.avatar} onChange={(url) => setForm({ ...form, avatar: url })} name={`${form.firstName} ${form.lastName}`} onUploadStart={(p) => { pendingUpload.current = p; }} />
           <div className="grid grid-cols-2 gap-4">
             {([["First Name", "firstName"], ["Last Name", "lastName"]] as const).map(([label, key]) => (
               <div key={key}>
@@ -596,23 +601,21 @@ export default function Students() {
       <StudentModal open={modal} onClose={() => { setModal(false); setEditStudent(null); }} initial={editStudent}
         sections={sections} busRoutes={busRoutes}
         onSave={async (d) => {
-          try {
-            if (editStudent) {
-              await api.admin.updateStudent(editStudent.id, d);
-            } else {
-              const result = await api.admin.createStudent(d);
-              if (result?.credentials) {
-                setCreatedCreds({
-                  ...result.credentials,
-                  admissionNo: result.admissionNo,
-                  parentCredentials: result.parentCredentials ?? null,
-                });
-              }
+          if (editStudent) {
+            await api.admin.updateStudent(editStudent.id, d);
+            return editStudent.id;
+          } else {
+            const result = await api.admin.createStudent(d);
+            if (result?.credentials) {
+              setCreatedCreds({
+                ...result.credentials,
+                admissionNo: result.admissionNo,
+                parentCredentials: result.parentCredentials ?? null,
+              });
             }
-          } finally {
-            reload();
+            return result;
           }
-        }} />
+        }} onReload={reload} />
 
       <CredentialsModal open={!!createdCreds} onClose={() => setCreatedCreds(null)} creds={createdCreds} role="student" />
     </>

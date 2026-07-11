@@ -34,8 +34,28 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+async function uploadFile(file: File): Promise<string> {
+  const token = getToken();
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(`${BASE}/api/upload`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: "Upload failed" }));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return data.url;
+}
+
 export const api = {
   // Public, unauthenticated — school directory + branded login
+  // Image upload
+  upload: uploadFile,
+
   public: {
     schools: (search?: string) => {
       const q = new URLSearchParams();
